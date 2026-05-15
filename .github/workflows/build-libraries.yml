@@ -1,0 +1,128 @@
+name: Build library bundle
+
+# Manually-triggered build of a prebuilt PSP library zip (SDL2, zlib, libpng,
+# freetype, libogg/libvorbis, ...) — see LIBRARIES.md for design.
+#
+# Workflow does not run on push. Library bundles are curated releases,
+# not every-commit artifacts. Trigger from the Actions tab.
+
+on:
+  workflow_dispatch:
+    inputs:
+      bundle_version:
+        description: 'Bundle version tag (e.g. v1)'
+        required: true
+        default: 'v0-dev'
+      create_release:
+        description: 'Create GitHub Release with the bundle artifact'
+        type: boolean
+        default: false
+      pspdev_ref:
+        description: 'pspdev fork ref to build the toolchain from'
+        required: false
+        default: 'windows-port'
+      psp_packages_ref:
+        description: 'psp-packages ref to source PSPBUILDs from'
+        required: false
+        default: 'master'
+
+permissions:
+  contents: write  # needed to create releases when create_release=true
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 240   # ~60-90 min toolchain build + ~30 min libraries on a cold cache
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+      - name: Checkout pspdev-win
+        uses: actions/checkout@v4
+        with:
+          path: pspdev-win
+
+      - name: Setup MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MSYS
+          update: true
+          # prepare.sh installs the heavy build deps via pacman; we just need
+          # enough of a shell to run it.
+          install: >-
+            base-devel
+            git
+
+      - name: Resolve pspdev fork commit (for cache key)
+        id: pspdev-rev
+        shell: bash
+        run: |
+          commit=$(git ls-remote https://github.com/dmang-dev/pspdev.git \
+            "refs/heads/${{ inputs.pspdev_ref }}" | cut -f1)
+          if [ -z "$commit" ]; then
+            # Maybe it's already a SHA or tag.
+            commit="${{ inputs.pspdev_ref }}"
+          fi
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "pspdev commit: $commit"
+
+      - name: Cache toolchain install
+        id: cache-toolchain
+        uses: actions/cache@v4
+        with:
+          path: pspdev-win/install
+          key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}
+
+      - name: Build toolchain (cache miss only)
+        if: steps.cache-toolchain.outputs.cache-hit != 'true'
+        shell: powershell
+        working-directory: pspdev-win
+        run: |
+          # MSYS2 was installed by msys2/setup-msys2 — its root is exposed as
+          # MSYS2_LOCATION. Pass it explicitly so bootstrap-windows doesn't try
+          # to auto-detect the standalone/devkitPro paths that don't exist on
+          # the runner.
+          $msys2Root = $env:MSYS2_LOCATION
+          if (-not $msys2Root) { $msys2Root = "D:\a\_temp\msys64" }
+          Write-Host "Using MSYS2 root: $msys2Root"
+          .\bootstrap-windows.ps1 `
+            -Msys2Root $msys2Root `
+            -PspdevBranch "${{ inputs.pspdev_ref }}"
+
+      - name: Build library bundle
+        working-directory: pspdev-win
+        run: |
+          export PSPDEV="$(pwd -W 2>/dev/null || pwd)/install"
+          export PATH="$PSPDEV/bin:$PATH"
+          psp-gcc --version
+          tools/build-library-bundle.sh \
+            --bundle-version "${{ inputs.bundle_version }}" \
+            --psp-packages-ref "${{ inputs.psp_packages_ref }}" \
+            --output "$(pwd)/dist"
+
+      - name: List bundle contents
+        working-directory: pspdev-win
+        run: |
+          ls -lh dist/
+          echo "--- manifest ---"
+          unzip -p dist/pspdev-win-libraries-*.zip libraries.json | head -200 || true
+
+      - name: Upload bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pspdev-win-libraries-${{ inputs.bundle_version }}
+          path: pspdev-win/dist/*.zip
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create GitHub Release
+        if: inputs.create_release == true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: libs-${{ inputs.bundle_version }}
+          name: PSP library bundle ${{ inputs.bundle_version }}
+          generate_release_notes: true
+          files: pspdev-win/dist/*.zip
+          fail_on_unmatched_files: true

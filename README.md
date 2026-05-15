@@ -121,18 +121,19 @@ PSP homebrew** — but here's exactly what you give up, and how fixable each is.
 
 `psp-packages` is a set of PSP ports of common libraries (SDL2, zlib, libpng,
 freetype, libvorbis, …); `psp-pacman` is the host-side package manager that
-installs them (`psp-pacman -S sdl2`).
+installs them (`psp-pacman -S sdl2`). Neither is needed for core homebrew
+development on pspsdk — they only matter once you want third-party libraries.
 
-- **You lose:** one-command install of those prebuilt libraries.
-- **You keep:** building them from source (`-LocalPackageBuild` — untested on
-  MSYS2, may need its own fixes), and *all* core homebrew dev on pspsdk.
-- **Two ways to fix this.** (1) Patch the underlying pacman to stop emitting
-  the leading `//` UNC path it dies on (`psp-pacman` already compiles 155/155
-  targets — only its meson `install` step fails). Or (2) take MinPSPW's
-  approach and skip the package manager entirely by publishing one prebuilt
-  library bundle per release. See [LIBRARIES.md](LIBRARIES.md) for the
-  bundle design — that's the route we're more likely to take, since it
-  doesn't require shipping a forked pacman.
+- **You lose, today:** one-command install of those prebuilt libraries via
+  `psp-pacman`.
+- **You keep:** *all* core homebrew dev on pspsdk; this is the only
+  meaningful gap.
+- **Path forward:** following MinPSPW, this repo plans to ship a single
+  prebuilt **library bundle** per release — extract one zip into `$PSPDEV`,
+  done. The build script + GitHub Actions workflow are already in tree
+  (`tools/build-library-bundle.sh`, `.github/workflows/build-libraries.yml`);
+  the first bundle hasn't shipped yet. See [LIBRARIES.md](LIBRARIES.md) for
+  the design and status.
 
 ### `pspsh` + `usbhostfs_pc` — USB host-link debugging
 

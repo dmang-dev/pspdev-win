@@ -1,9 +1,19 @@
-# Prebuilt PSP libraries — design doc
+# Prebuilt PSP libraries
 
-**Status: design only, not implemented.** This file describes how
-`pspdev-win` plans to deliver prebuilt PSP libraries (SDL2, zlib, libpng,
-freetype, …) without requiring `psp-pacman`, which is currently skipped on
-Windows.
+**Status: implemented; first bundle not yet shipped.** This file describes
+how `pspdev-win` builds and ships prebuilt PSP libraries (SDL2, zlib,
+libpng, freetype, …) without requiring `psp-pacman`, which is currently
+skipped on Windows.
+
+The implementation lives in:
+
+- [`tools/build-library-bundle.sh`](tools/build-library-bundle.sh) —
+  drives PSPBUILD files from `pspdev/psp-packages` directly, with no
+  `psp-pacman` / `psp-makepkg` dependency.
+- [`.github/workflows/build-libraries.yml`](.github/workflows/build-libraries.yml) —
+  `workflow_dispatch` CI workflow that builds the toolchain (cached
+  per-fork-commit), runs the bundle script, and optionally publishes a
+  GitHub Release.
 
 ## Why a bundle, not a package manager
 
@@ -35,57 +45,104 @@ The trade-off favors the bundle for a community where a typical user wants
 ## Target library set
 
 MinPSPW 2008–2016 bundled ~30 libraries. A useful 2026-era starter set,
-prioritized by what modern PSP homebrew actually uses:
+prioritized by what modern PSP homebrew actually uses. Package names match
+the directory names in `pspdev/psp-packages`.
 
-**Tier 1 (must have):**
-- SDL2, SDL2_image, SDL2_mixer, SDL2_ttf
-- zlib, libpng, libjpeg-turbo
-- freetype
-- libogg, libvorbis, libtremor
-- pthread-embedded (already partly handled by pspdev itself)
+**Tier 1 (shipped in the bundle, first release):**
 
-**Tier 2 (commonly wanted):**
-- lua / luajit
-- libmad, libmikmod, libflac
-- libpspmath, libpspvram
-- intraFont
-- TinyGL, pspgl
+User-requested:
+- `sdl2`, `sdl2-image`, `sdl2-mixer`, `sdl2-ttf`
+- `zlib`, `libpng`, `jpeg`
+- `freetype2`
+- `libogg`, `libvorbis`, `tremor`
+
+Pulled in transitively by `get_build_order.py` (the user doesn't have to
+list these explicitly):
+- `bzip2` (via freetype2)
+- `libmodplug` (via sdl2-mixer)
+- `harfbuzz` (via sdl2-ttf)
+- `libpspvram`, `pspgl` (via sdl2)
+
+`pthread-embedded` is already installed by `psptoolchain-allegrex` during
+the core toolchain build; it's part of the toolchain install, not the
+library bundle.
+
+**Tier 2 (commonly wanted, planned follow-up):**
+- `lua` / `luajit`
+- `libmad`, `mikmod`, `flac`
+- `libpspmath`
+- `intrafont`
+- `tinygl`
 
 **Tier 3 (nice to have, evaluate by request):**
-- libcurl, libssh2 (PSP networking is a niche)
-- libchm, libtga
-- libid3tag, libexif
-- ode, libbulletml (physics — heavy)
+- `curl`, `libssh2` (PSP networking is a niche)
+- `libchm`, `libtga`
+- `libid3tag`, `libexif`
+- `ode`, `libbulletml` (physics — heavy)
 
 First release ships Tier 1 only — keeps the bundle small (~few MB compiled)
-and the scope bounded. Tier 2 follows in subsequent releases.
+and the scope bounded. Tier 2 follows in subsequent releases. The package
+list passed to `--packages` is the only thing that changes between tiers.
 
 ## Build approach
 
-1. **CI workflow** (GitHub Actions) on `dmang-dev/pspdev-win`:
-   - Trigger: manual `workflow_dispatch` (not automatic; library bundles are
-     curated releases, not every-commit artifacts).
-   - Runner: `windows-latest` (or `windows-2022`).
-   - Install MSYS2 via `msys2/setup-msys2@v2`.
-   - Run `bootstrap-windows.ps1 -LocalPackageBuild` against a known-good
-     pspdev fork commit pinned in the workflow.
-   - After build, walk `$PSPDEV/psp/{lib,include}` and snapshot the *new*
-     files (diff against a baseline taken after a no-libraries build) per
-     library. Group into one zip:
-     - `pspdev-win-libraries-<gcc-version>-<bundle-version>.zip`
-     - top-level structure mirrors `$PSPDEV/psp/`, so users extract over
-       their existing install.
-   - Attach to a GitHub Release; tag scheme: `libs-vN.M`.
+### Bypassing `psp-pacman`
 
-2. **`-LocalPackageBuild` is presently untested.** First task in actually
-   implementing this is to drive `bootstrap-windows.ps1 -LocalPackageBuild`
-   to completion under MSYS2 and capture every failure as a patch against
-   `pspdev/psp-packages` (or upstream library sources). The result is a
-   sibling of the existing `windows-port` branch, plus the bundle zip.
+`psp-packages/build.sh --install` (which is what `bootstrap-windows.ps1
+-LocalPackageBuild` would have called) goes through `psp-makepkg` to
+tarball each library and then `psp-pacman -U` to install it — both
+unavailable on MSYS2 today thanks to the meson `//` UNC bug in pacman.
 
-3. **Per-library license aggregation.** Each library has its own license;
-   the bundle release notes should include a list with SPDX identifiers.
-   Trivial to generate from the source `LICENSE` files captured during build.
+A PSPBUILD itself, though, is just a small bash script with `prepare()`,
+`build()`, and `package()` functions that produce a clean
+`${pkgdir}/psp/{lib,include,share}/...` staging tree. The tarball-and-DB
+step that `makepkg` + `pacman` add on top is irrelevant for a bundle
+release. So the bundle script drives PSPBUILDs directly:
+
+1. Clone `pspdev/psp-packages` at a pinned commit.
+2. Use the repo's own `get_build_order.py` to resolve transitive
+   dependencies into a topologically-sorted list.
+3. For each package, in a subshell:
+   - download + verify the `source=()` entries against `sha256sums=()`,
+   - extract,
+   - run `prepare()` / `build()` / `package()` with `$srcdir` and `$pkgdir`
+     pointing at per-package working dirs,
+   - capture any `LICENSE` / `COPYING` files into a `licenses/<pkg>/` dir.
+4. Merge every package's `${pkgdir}/psp/` tree into a single staging area.
+5. Emit `libraries.json` manifest (versions, releases, SPDX licenses,
+   `psp-packages` commit, GCC version).
+6. Zip the staging area as
+   `pspdev-win-libraries-<gcc-version>-<bundle-version>.zip`.
+
+The user extracts that zip over `$PSPDEV/` and is done. Layout matches
+`$PSPDEV/psp/` exactly.
+
+### CI workflow
+
+`.github/workflows/build-libraries.yml` wraps the above for GitHub Actions:
+
+- **Trigger**: `workflow_dispatch` only — library bundles are curated
+  releases, not every-commit artifacts.
+- **Runner**: `windows-2022`.
+- **MSYS2**: `msys2/setup-msys2@v2`, standalone (not devkitPro's bundled
+  variant — clean package namespace, current packages).
+- **Toolchain cache**: keyed on the pspdev fork's HEAD commit. First run is
+  ~60–90 min; cache hits skip straight to library build.
+- **Inputs**:
+  - `bundle_version` (e.g. `v1`) — surfaces in the zip filename, manifest,
+    and (optional) release tag.
+  - `create_release` (bool) — when true, the workflow tags
+    `libs-<bundle_version>` and uploads the zip as a GitHub Release.
+  - `pspdev_ref` / `psp_packages_ref` — let the workflow pin to specific
+    commits for reproducibility.
+
+### Per-library license aggregation
+
+Each library's `LICENSE` / `COPYING` / `COPYRIGHT` files (best-effort glob
+under `$srcdir`) are copied into `licenses/<pkg>/` in the bundle. The
+`license` field from each PSPBUILD goes into `libraries.json`; not always
+SPDX-canonical (PSPBUILDs use shorthand like `'custom'` or `'Zlib'`), but
+enough to point a reader at the right file.
 
 ## Versioning
 
@@ -108,18 +165,22 @@ and the scope bounded. Tier 2 follows in subsequent releases.
 
 ## Open questions
 
-1. Does `pspdev/psp-packages`' `build.sh --install` actually work end-to-end
-   under MSYS2 today? (Untested. Probably needs its own small patch set.)
-2. Should the bundle include a manifest file listing each library + version
-   + license? (Yes, probably — one-line `libraries.json` at the zip root.)
-3. Should we also publish each library as a separate zip for users who only
-   want one? (No, for v1 — keep it simple. Reconsider if anyone asks.)
-4. Standalone MSYS2 vs devkitPro MSYS2 in CI? (Standalone — clean repo
-   namespace, current packages. devkitPro is the "yes it works on dkP too"
-   fallback path, not the CI target.)
+1. Per-library zips alongside the combined bundle? (No, for v1 — keep it
+   simple. Reconsider if anyone asks.)
+2. Pin `psp-packages` to a tagged commit per bundle release, or always
+   build off `master`? Probably pin once the first bundle ships; lets us
+   reproduce older bundles from the manifest.
 
-## How to follow / pick this up
+## How to use it
 
-Track as an issue on `dmang-dev/pspdev-win`. Anyone interested in working
-on it: start by running `bootstrap-windows.ps1 -LocalPackageBuild` and
-filing what breaks.
+Locally (after `bootstrap-windows.ps1` has built the toolchain at least
+once), from an MSYS2 shell:
+
+```bash
+export PSPDEV="$(pwd)/install"
+export PATH="$PSPDEV/bin:$PATH"
+tools/build-library-bundle.sh --bundle-version v1
+```
+
+In CI: go to **Actions → Build library bundle → Run workflow**, fill in
+the bundle version, and decide whether to publish a Release.
