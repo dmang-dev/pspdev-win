@@ -72,24 +72,71 @@ OUTPUT_DIR="${OUTPUT_DIR:-$REPO_ROOT/dist}"
 
 # === Preflight ===
 
+# Logs go to stderr so they don't pollute command substitutions like
+# fetched=$(fetch_source ...) — captured stdout must contain only the
+# function's return value (a file path, a build order, etc.).
 err() { echo "[bundle] ERROR: $*" >&2; }
-info() { echo "[bundle] $*"; }
+info() { echo "[bundle] $*" >&2; }
 
 preflight() {
     if [ -z "${PSPDEV:-}" ]; then
         err "PSPDEV not set in the environment"
+        err ""
+        err "From an MSYS2 shell with the toolchain installed at <repo>/install:"
+        err "    export PSPDEV=\"\$(cd \"\$(dirname \"\${BASH_SOURCE[0]:-\$0}\")/..\" && pwd)/install\""
+        err "    export PATH=\"\$PSPDEV/bin:\$PATH\""
+        err ""
+        err "Or simply:"
+        err "    export PSPDEV=/i/pspdev-win/install"
+        err "    export PATH=\"\$PSPDEV/bin:\$PATH\""
         exit 1
     fi
     if [ ! -d "$PSPDEV" ]; then
         err "PSPDEV=$PSPDEV is not a directory"
         exit 1
     fi
-    local missing=()
+    # Map tool name -> MSYS2 package name (identity except where noted).
+    declare -A pkg_for
+    pkg_for[cmake]=cmake
+    pkg_for[make]=make
+    pkg_for[curl]=curl
+    pkg_for[sha256sum]=coreutils
+    pkg_for[tar]=tar
+    pkg_for[unzip]=unzip
+    pkg_for[zip]=zip
+    pkg_for[git]=git
+    pkg_for[python3]=python
+
+    local missing=() missing_pkgs=()
     for tool in psp-gcc psp-pkg-config cmake make curl sha256sum tar unzip zip git python3; do
-        command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing+=("$tool")
+            if [ -n "${pkg_for[$tool]:-}" ]; then
+                missing_pkgs+=("${pkg_for[$tool]}")
+            fi
+        fi
     done
     if [ ${#missing[@]} -gt 0 ]; then
         err "Missing required tools: ${missing[*]}"
+        if [ ${#missing_pkgs[@]} -gt 0 ]; then
+            # Dedupe the package list.
+            local uniq_pkgs
+            uniq_pkgs="$(printf '%s\n' "${missing_pkgs[@]}" | sort -u | tr '\n' ' ')"
+            err ""
+            err "On MSYS2, install them with:"
+            err "    pacman -S --noconfirm $uniq_pkgs"
+        fi
+        # psp-gcc / psp-pkg-config not in the table — those mean the toolchain
+        # hasn't been built yet or PSPDEV/bin isn't on PATH.
+        for tool in "${missing[@]}"; do
+            case "$tool" in
+                psp-gcc|psp-pkg-config)
+                    err ""
+                    err "($tool comes from the pspdev toolchain — make sure"
+                    err " \$PSPDEV/bin is on PATH, or run bootstrap-windows.ps1)"
+                    break ;;
+            esac
+        done
         exit 1
     fi
     info "Preflight OK"

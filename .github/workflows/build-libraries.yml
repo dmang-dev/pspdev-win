@@ -49,11 +49,17 @@ jobs:
         with:
           msystem: MSYS
           update: true
-          # prepare.sh installs the heavy build deps via pacman; we just need
-          # enough of a shell to run it.
+          # prepare.sh installs the heavy toolchain build deps via pacman.
+          # Here we pre-install only what the bundle script itself needs
+          # beyond base-devel (zip/unzip/cmake/python/curl).
           install: >-
             base-devel
             git
+            zip
+            unzip
+            cmake
+            curl
+            python
 
       - name: Resolve pspdev fork commit (for cache key)
         id: pspdev-rev
