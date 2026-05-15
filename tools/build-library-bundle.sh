@@ -256,18 +256,21 @@ build_one_package() {
             i=$((i + 1))
         done
 
-        cd "$srcdir"
-
+        # Real makepkg resets cwd to $srcdir before each function. PSPBUILDs
+        # commonly do `cd "${pkgname}-${pkgver}"` in *both* prepare() and
+        # build(), which only works if we reset between calls. Wrap each
+        # function in a subshell with `set +u` (PSPBUILDs reference optional
+        # vars) and a fresh `cd "$srcdir"`.
         if declare -F prepare >/dev/null; then
             info "  prepare()"
-            set +u; prepare; set -u
+            ( cd "$srcdir"; set +u; prepare )
         fi
 
         info "  build()"
-        set +u; build; set -u
+        ( cd "$srcdir"; set +u; build )
 
         info "  package()"
-        set +u; package; set -u
+        ( cd "$srcdir"; set +u; package )
     )
 
     # Merge the package's $pkgdir/psp/ tree into the bundle staging area.
