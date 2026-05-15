@@ -1,0 +1,10 @@
+# Default: detect text/binary, normalize to LF in the repo.
+* text=auto eol=lf
+
+# Shell scripts MUST be LF on disk (bash will choke on \r in shebangs).
+*.sh    text eol=lf
+
+# Windows-native scripts use CRLF.
+*.ps1   text eol=crlf
+*.bat   text eol=crlf
+*.cmd   text eol=crlf
