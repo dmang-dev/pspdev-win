@@ -35,12 +35,14 @@ to build essentially any PSP homebrew that doesn't depend on the prebuilt
 `psp-packages` binaries or USB host-link debugging.
 
 > [!IMPORTANT]
-> **This is an MSYS2-hosted toolchain, not a standalone native one.**
-> The build uses MSYS2's GCC, so the produced `psp-gcc.exe` & friends are
-> `x86_64-pc-cygwin` binaries that depend on `msys-2.0.dll`. They run *under
-> MSYS2* (or from any shell that has both `<PSPDEV>\bin` **and** the MSYS2
-> `usr\bin` on `PATH`). A fully self-contained, MINGW-hosted toolchain you can
-> zip up and hand to anyone is a larger separate effort — see the roadmap.
+> **This is an MSYS2-hosted toolchain — the same architecture native PSP dev
+> on Windows has always used.** The produced `psp-gcc.exe` & friends are
+> `x86_64-pc-cygwin` binaries that depend on `msys-2.0.dll`; they run from
+> any shell with both `<PSPDEV>\bin` **and** the MSYS2 `usr\bin` on `PATH`.
+> Michael Grigorev / NVStat Team's **PSPDEV for Windows** shipped this same
+> Cygwin-hosted approach from 2008–2016 (with GCC 4.3.2); we're just doing
+> it again with GCC 15.2.0. A fully self-contained MINGW-hosted build, if
+> anyone ever wants one, would be a separate effort.
 
 ---
 
@@ -124,12 +126,13 @@ installs them (`psp-pacman -S sdl2`).
 - **You lose:** one-command install of those prebuilt libraries.
 - **You keep:** building them from source (`-LocalPackageBuild` — untested on
   MSYS2, may need its own fixes), and *all* core homebrew dev on pspsdk.
-- **Fixable?** **Yes, and it's close.** `psp-pacman` actually *compiles* fine
-  (155/155 targets) — it dies on one meson install step: `mkdir -p
-  "$DESTDIR/<abspath>"` produces a leading `//`, which MSYS2 interprets as a
-  UNC path. The fix is one more patch to the bundled pacman's `meson.build`.
-  Once `psp-pacman` installs, `psp-packages` works too (it just calls
-  `psp-pacman -S`). **Good first contribution.**
+- **Two ways to fix this.** (1) Patch the underlying pacman to stop emitting
+  the leading `//` UNC path it dies on (`psp-pacman` already compiles 155/155
+  targets — only its meson `install` step fails). Or (2) take MinPSPW's
+  approach and skip the package manager entirely by publishing one prebuilt
+  library bundle per release. See [LIBRARIES.md](LIBRARIES.md) for the
+  bundle design — that's the route we're more likely to take, since it
+  doesn't require shipping a forked pacman.
 
 ### `pspsh` + `usbhostfs_pc` — USB host-link debugging
 
@@ -141,11 +144,12 @@ host-side `printf` output.
 - **You keep:** building homebrew; `libpsplink` + `psplink_boot.prx` (the
   *on-PSP* side) do build; and **PPSSPP** — how most PSP homebrew is tested
   today — needs none of this.
-- **Fixable?** **Yes, medium effort.** The blocker is `libusb`, which is
-  filtered out of devkitPro's MSYS2 but available on standalone MSYS2
-  (`pacman -S libusb`). These shipped as Windows `.exe`s in the old
-  devkitPSP era, so it's well-trodden — likely libusb path fixes plus the
-  WinUSB/Zadig driver setup for runtime USB access.
+- **Fixable.** The only reason these are skipped today is that devkitPro's
+  filtered MSYS2 doesn't ship `libusb`. PSPDEV for Windows bundled
+  `libusb-win32` and shipped working `pspsh.exe` / `usbhostfs_pc.exe` for
+  years, so this isn't novel territory — it's a one-time setup. On
+  standalone MSYS2, `pacman -S libusb` + flipping our skip in
+  `004-psplinkusb-extra.sh` is the obvious starting point.
 
 ---
 
@@ -196,6 +200,19 @@ This repo (`pspdev-win`) is just the **Windows entry point**:
   enablement layer on top of their work.
 - [**MSYS2**](https://www.msys2.org/) / [**devkitPro**](https://devkitpro.org/)
   — the POSIX build environment that makes this possible.
+
+### Prior art
+
+**PSPDEV for Windows** (a.k.a. Minimalist PSPSDK / MinPSPW) by
+**Michael Grigorev / NVStat Team** — the Cygwin-hosted Windows port of
+PSPSDK that served the community from ~2008 to 2016, bundling GCC 4.3.2,
+PSPSDK build 2443, and ~30 prebuilt PSP libraries (SDL, SDL_mixer, SDL_ttf,
+freetype, libpng, libvorbis, lua, ode, TinyGL, …) in a single installer.
+That project established the architecture this repo uses today: a
+Cygwin/MSYS-hosted toolchain with libraries delivered as one prebuilt set,
+not via a package manager. Site:
+<http://novell.chel.ru/start.php?dir=plugin/psp/dev&app=sdk&lng=english>
+(intermittently available).
 
 ## License
 
