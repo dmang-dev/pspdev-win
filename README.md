@@ -26,8 +26,8 @@ PSP executable.
 | `pspsdk` | ✅ builds & installs | all `libpsp*.a`, headers, samples, host tools (`psp-prxgen`, `pack-pbp`, `mksfoex`, …) |
 | `psplinkusb` — `libpsplink`, `psplink_boot.prx` | ✅ builds & installs | the on-PSP debug stub |
 | `ebootsigner` | ✅ builds & installs | EBOOT signing tool |
-| `psp-pacman` | ✅ builds & installs | binary runs, parses config; `-S` install path still needs follow-up (see below) |
-| `psp-packages` | ⏭️ via bundle | shipped as one zip via [`tools/build-library-bundle.sh`](LIBRARIES.md), not via `psp-pacman -S` |
+| `psp-pacman` | ✅ builds, installs, syncs, installs packages | verified `psp-pacman -S sdl2` end-to-end on vanilla MSYS2 |
+| `psp-packages` | ✅ via `psp-pacman -S` *or* bundle | bundle (`tools/build-library-bundle.sh`, see [LIBRARIES.md](LIBRARIES.md)) is recommended for end users; `psp-pacman -S` is fine for dev iteration |
 | `psplinkusb` — `pspsh`, `usbhostfs_pc` | ⏭️ skipped | USB host-link debug tools — see [Roadmap](#whats-skipped-and-why) |
 
 The result is a complete PSP homebrew toolchain: C and C++ cross-compiler,
@@ -115,48 +115,51 @@ To turn an `.elf` into a runnable `EBOOT.PBP`, use the standard pspsdk
 
 ## What's partial / skipped
 
-### `psp-pacman` — builds now, full `-S` install path still WIP
+### `psp-pacman` — fully working on Windows
 
 Upstream pacman's `meson.build` does
 `mkdir -p "$DESTDIR/<abs-path>"` in its install step. When `DESTDIR` is
 empty (the typical case), MSYS2 sees `//<abs-path>` and interprets the
 leading `//` as a UNC share prefix, failing with
 `cannot create directory '//i': Read-only file system`. Linux's `mkdir`
-treats `//` like `/` so the bug never surfaces there.
+treats `//` like `/` so the bug never surfaces there. The `windows-port`
+branch of our pspdev fork ships a one-character patch
+(`patches/psp-pacman/fix-destdir-double-slash.patch`) that drops the slash
+between `$DESTDIR` and the absolute path — the standard Autotools
+`$(DESTDIR)$(prefix)` pattern, identical on Linux/macOS, correct on MSYS2.
 
-The `windows-port` branch of our pspdev fork now ships a one-character
-patch (`patches/psp-pacman/fix-destdir-double-slash.patch`) that drops
-the slash between `$DESTDIR` and the absolute path — the standard
-Autotools `$(DESTDIR)$(prefix)` pattern, identical behavior on Linux/macOS,
-correct behavior on MSYS2. With this in place, `psp-pacman` builds, installs
-to `$PSPDEV/share/pacman/bin/`, runs, and parses its config file.
+The fork also installs `libgpgme-devel` and `libcurl-devel` via
+`prepare.sh`. Without these, pacman is built with `HAVE_LIBCURL` and
+`HAVE_LIBGPGME` both `#undef`'d, which makes `pacman -Sy` fail with
+`error invoking external downloader` (no libcurl → libalpm has no
+internal HTTP path) and the default `pacman.conf` rejected because
+`SigLevel = Optional TrustAll` is invalid without compiled-in signature
+support.
 
-The `windows-port` branch also installs `libgpgme-devel` and `libcurl-devel`
-via `prepare.sh`, which pacman 6.0.1's meson auto-detects and links in.
-Without these, our pacman was built with `HAVE_LIBCURL` and `HAVE_LIBGPGME`
-both `#undef`'d, which caused:
+**Verified end-to-end on standalone MSYS2**:
 
-- `pacman -Sy` to fail with `error invoking external downloader` (no
-  libcurl → libalpm has no internal HTTP path),
-- the default `pacman.conf` to be rejected because `SigLevel = Optional
-  TrustAll` is invalid when pacman wasn't compiled with signature support.
+```
+psp-pacman -Sy            -> syncs https://pspdev.github.io/psp-packages/pspdev.db
+psp-pacman -Ss sdl2       -> lists sdl2, sdl2-image, sdl2-mixer, sdl2-ttf, ...
+psp-pacman -S sdl2        -> downloads + installs sdl2 + pspgl + libpspvram (~1.2 MiB)
+psp-pacman -Q             -> sdl2 2.32.8-3, pspgl r12-6, libpspvram r11.885fd3f-5
+```
 
-With those installed and pacman rebuilt, the apparent "repo URL 404" we'd
-attributed to upstream `psp-packages` turned out to just be the missing
-libcurl masking the actual fetch — the URL
-`https://pspdev.github.io/psp-packages/pspdev.db` is fine and contains
-all the expected packages.
+`libSDL2.a`, `libGL.a`, headers land in `$PSPDEV/psp/{lib,include}/`.
 
-One real follow-up remains: pacman's `Hook Dirs` listing duplicates the
-prefix at runtime (`/i/pspdev-win/install/i/pspdev-win/install/share/libalpm/hooks/`).
-This is a `RootDir`-vs-`HookDir` interaction in pacman when prefix isn't
-the system root; doesn't block `pacman -Sy` but should be cleaned up.
+One minor cosmetic follow-up: pacman's `Hook Dirs` listing duplicates the
+prefix at runtime (`$PSPDEV/$PSPDEV/share/libalpm/hooks/`). This is a
+`RootDir`-vs-`HookDir` interaction in pacman when prefix isn't the system
+root. Doesn't block `-S` (the unduplicated path is also in the list); a
+cleaner fix is a future patch.
 
-For actually shipping libraries to users, this repo uses a **single
-prebuilt bundle** (`tools/build-library-bundle.sh`, see
-[LIBRARIES.md](LIBRARIES.md)) rather than `psp-pacman -S`. The bundle path
-doesn't need pacman to work at all, so it's the recommended route
-regardless of how `psp-pacman` lands.
+For shipping libraries **to users**, this repo still defaults to a
+**single prebuilt bundle** (`tools/build-library-bundle.sh`, see
+[LIBRARIES.md](LIBRARIES.md)) rather than asking users to run
+`psp-pacman -S` themselves. The bundle path is simpler (one zip extracted
+over `$PSPDEV`, done) and matches the historical MinPSPW model. But for
+developers iterating on the toolchain, `psp-pacman -S <pkg>` now works as
+a real alternative.
 
 ### `pspsh` + `usbhostfs_pc` — USB host-link debugging
 
