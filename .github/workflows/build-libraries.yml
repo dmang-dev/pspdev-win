@@ -75,14 +75,19 @@ jobs:
           echo "commit=$commit" >> "$GITHUB_OUTPUT"
           echo "pspdev commit: $commit"
 
-      - name: Cache toolchain install
+      # Split restore + save (instead of the combined `actions/cache@v4`) so a
+      # successful toolchain build survives a later step's failure. The
+      # combined action's post-save is skipped on job failure, so when the
+      # bundle step failed we lost 90 minutes of toolchain build on retry.
+      - name: Restore toolchain cache
         id: cache-toolchain
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: pspdev-win/install
           key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}
 
       - name: Build toolchain (cache miss only)
+        id: build-toolchain
         if: steps.cache-toolchain.outputs.cache-hit != 'true'
         shell: powershell
         working-directory: pspdev-win
@@ -97,6 +102,17 @@ jobs:
           .\bootstrap-windows.ps1 `
             -Msys2Root $msys2Root `
             -PspdevBranch "${{ inputs.pspdev_ref }}"
+
+      - name: Save toolchain cache (even on later failure)
+        # Only save when we actually built (cache miss + build succeeded).
+        # `if: always()` makes the step run regardless of subsequent job
+        # success/failure, so a flaky bundle step doesn't cost us the
+        # toolchain build on the next retry.
+        if: always() && steps.cache-toolchain.outputs.cache-hit != 'true' && steps.build-toolchain.conclusion == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: pspdev-win/install
+          key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}
 
       - name: Build library bundle
         working-directory: pspdev-win
