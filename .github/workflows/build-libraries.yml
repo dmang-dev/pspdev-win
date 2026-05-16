@@ -93,9 +93,8 @@ jobs:
         working-directory: pspdev-win
         run: |
           # MSYS2 was installed by msys2/setup-msys2 — its root is exposed as
-          # MSYS2_LOCATION. Pass it explicitly so bootstrap-windows doesn't try
-          # to auto-detect the standalone/devkitPro paths that don't exist on
-          # the runner.
+          # MSYS2_LOCATION. Pass it explicitly so bootstrap-windows doesn't
+          # try to auto-detect C:\msys64 (which doesn't exist on the runner).
           $msys2Root = $env:MSYS2_LOCATION
           if (-not $msys2Root) { $msys2Root = "D:\a\_temp\msys64" }
           Write-Host "Using MSYS2 root: $msys2Root"

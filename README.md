@@ -14,9 +14,9 @@ One PowerShell command takes you from a clean Windows box to a working
 
 ## Status — verified working
 
-Built and verified end-to-end on devkitPro's bundled MSYS2 (`MSYS_NT-10.0`,
-GCC 15.2.0 host). `psp-gcc` compiles and links a real `ELF32 / MIPS R3000`
-PSP executable.
+Built and verified end-to-end on standalone MSYS2 (`MSYS_NT-10.0`, GCC 15.2.0
+host — both locally on `C:\msys64` and in CI via `msys2/setup-msys2@v2`).
+`psp-gcc` compiles and links a real `ELF32 / MIPS R3000` PSP executable.
 
 | Component | State | Notes |
 |---|---|---|
@@ -50,16 +50,25 @@ to build essentially any PSP homebrew that doesn't depend on the prebuilt
 ## Requirements
 
 - **Windows 10/11 x64**
-- **An MSYS2 install**, either:
-  - standalone MSYS2 from <https://www.msys2.org/> (preferred — clean package
-    namespace, current packages), or
-  - devkitPro's bundled MSYS2 at `C:\devkitPro\msys2` (auto-detected as a
-    fallback)
-- **Git** (Git for Windows is fine)
+- **Standalone MSYS2** from <https://www.msys2.org/> (extract
+  `msys2-base-x86_64-*.tar.xz` to `C:\`, or run the installer). Default
+  location is `C:\msys64`.
+- **Git** (Git for Windows is fine — the project clones itself with this)
 - **~5 GB** free disk for the build
 
-`bootstrap-windows.ps1` auto-detects MSYS2 at `C:\msys64`, `C:\msys2`, or
-`C:\devkitPro\msys2`. Override with `-Msys2Root <path>`.
+`bootstrap-windows.ps1` auto-detects MSYS2 at `C:\msys64` or `C:\msys2`.
+Override with `-Msys2Root <path>` if installed elsewhere (e.g. on a
+non-C: drive).
+
+> [!NOTE]
+> **Why not devkitPro's bundled MSYS2?** Older versions of this README
+> listed devkitPro's MSYS2 at `C:\devkitPro\msys2` as an option. It's not
+> supported anymore — devkitPro ships a filtered MSYS2 package namespace
+> (missing `libusb`, `libgpgme`, and others we need), its `ensurepip` is
+> broken, and its `/opt/devkitpro/` path layout caused subtle issues
+> during local builds. Standalone MSYS2 is the single supported path.
+> Installing standalone MSYS2 alongside an existing devkitPro install
+> works fine — they don't conflict.
 
 ---
 
@@ -171,12 +180,12 @@ host-side `printf` output.
 - **You keep:** building homebrew; `libpsplink` + `psplink_boot.prx` (the
   *on-PSP* side) do build; and **PPSSPP** — how most PSP homebrew is tested
   today — needs none of this.
-- **Fixable.** The only reason these are skipped today is that devkitPro's
-  filtered MSYS2 doesn't ship `libusb`. PSPDEV for Windows bundled
-  `libusb-win32` and shipped working `pspsh.exe` / `usbhostfs_pc.exe` for
-  years, so this isn't novel territory — it's a one-time setup. On
-  standalone MSYS2, `pacman -S libusb` + flipping our skip in
-  `004-psplinkusb-extra.sh` is the obvious starting point.
+- **Fixable.** These were originally skipped because we hit them while
+  testing on devkitPro's filtered MSYS2 (which doesn't ship `libusb`).
+  Standalone MSYS2 *does* ship `libusb` — `pacman -S libusb` plus
+  flipping our skip in `004-psplinkusb-extra.sh` is the obvious starting
+  point. PSPDEV for Windows bundled `libusb-win32` for years, so this
+  isn't novel territory; open follow-up.
 
 ---
 
@@ -226,8 +235,8 @@ This repo (`pspdev-win`) is just the **Windows entry point**:
 - [**pspdev**](https://github.com/pspdev/pspdev) and the PSP Homebrew
   Development team — the actual toolchain. This project is a thin Windows
   enablement layer on top of their work.
-- [**MSYS2**](https://www.msys2.org/) / [**devkitPro**](https://devkitpro.org/)
-  — the POSIX build environment that makes this possible.
+- [**MSYS2**](https://www.msys2.org/) — the POSIX build environment that
+  makes this possible.
 
 ### Prior art
 

@@ -124,8 +124,8 @@ The user extracts that zip over `$PSPDEV/` and is done. Layout matches
 - **Trigger**: `workflow_dispatch` only — library bundles are curated
   releases, not every-commit artifacts.
 - **Runner**: `windows-2022`.
-- **MSYS2**: `msys2/setup-msys2@v2`, standalone (not devkitPro's bundled
-  variant — clean package namespace, current packages).
+- **MSYS2**: `msys2/setup-msys2@v2` (standalone MSYS2 is the only
+  supported environment).
 - **Toolchain cache**: keyed on the pspdev fork's HEAD commit. First run is
   ~60–90 min; cache hits skip straight to library build.
 - **Inputs**:

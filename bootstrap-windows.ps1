@@ -6,8 +6,8 @@
 
 .DESCRIPTION
     This is the Windows entry point for the pspdev-win port. It:
-      1. Locates an MSYS2 install (prefers a standalone C:\msys64, falls back
-         to the devkitPro-bundled MSYS2 at C:\devkitPro\msys2).
+      1. Locates a standalone MSYS2 install (C:\msys64 by default; install
+         from https://www.msys2.org/).
       2. Clones the patched pspdev fork (windows-port branch) next to this
          script if it isn't already there.
       3. Ensures PSPDEV is set to a sane absolute path with no spaces.
@@ -67,11 +67,15 @@ function Find-Msys2Root {
         if (Test-Path (Join-Path $Override "usr\bin\bash.exe")) { return $Override }
         throw "Msys2Root '$Override' does not contain usr\bin\bash.exe"
     }
-    $candidates = @("C:\msys64", "C:\msys2", "C:\devkitPro\msys2")
+    $candidates = @("C:\msys64", "C:\msys2")
     foreach ($c in $candidates) {
         if (Test-Path (Join-Path $c "usr\bin\bash.exe")) { return $c }
     }
-    throw "No MSYS2 install found. Install MSYS2 from https://www.msys2.org/ or pass -Msys2Root <path>."
+    throw @"
+No MSYS2 install found at C:\msys64 or C:\msys2.
+Install MSYS2 from https://www.msys2.org/ (extract msys2-base-x86_64-*.tar.xz
+to C:\, or run the installer), or pass -Msys2Root <path> to override.
+"@
 }
 
 function Assert-PspDevPath {
