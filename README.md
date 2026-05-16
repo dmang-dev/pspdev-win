@@ -131,23 +131,32 @@ Autotools `$(DESTDIR)$(prefix)` pattern, identical behavior on Linux/macOS,
 correct behavior on MSYS2. With this in place, `psp-pacman` builds, installs
 to `$PSPDEV/share/pacman/bin/`, runs, and parses its config file.
 
-What still doesn't work end-to-end:
+The `windows-port` branch also installs `libgpgme-devel` and `libcurl-devel`
+via `prepare.sh`, which pacman 6.0.1's meson auto-detects and links in.
+Without these, our pacman was built with `HAVE_LIBCURL` and `HAVE_LIBGPGME`
+both `#undef`'d, which caused:
 
-- **No `gpgme` linked in.** Our MSYS2 build doesn't pull
-  `libgpgme-devel`, so pacman is built without signature support. The
-  default `pacman.conf` ships `SigLevel = Optional TrustAll`, which a
-  no-signature-support pacman rejects as an invalid option. Fix: install
-  `libgpgme-devel` in `prepare.sh`, rebuild. Open follow-up.
-- **`psp-packages` repo URL returns 404.** The configured
-  `https://pspdev.github.io/psp-packages/psp/pspdev.db` doesn't exist
-  at that path. May be a stale config or a path-layout change upstream.
-  Open follow-up.
+- `pacman -Sy` to fail with `error invoking external downloader` (no
+  libcurl → libalpm has no internal HTTP path),
+- the default `pacman.conf` to be rejected because `SigLevel = Optional
+  TrustAll` is invalid when pacman wasn't compiled with signature support.
+
+With those installed and pacman rebuilt, the apparent "repo URL 404" we'd
+attributed to upstream `psp-packages` turned out to just be the missing
+libcurl masking the actual fetch — the URL
+`https://pspdev.github.io/psp-packages/pspdev.db` is fine and contains
+all the expected packages.
+
+One real follow-up remains: pacman's `Hook Dirs` listing duplicates the
+prefix at runtime (`/i/pspdev-win/install/i/pspdev-win/install/share/libalpm/hooks/`).
+This is a `RootDir`-vs-`HookDir` interaction in pacman when prefix isn't
+the system root; doesn't block `pacman -Sy` but should be cleaned up.
 
 For actually shipping libraries to users, this repo uses a **single
 prebuilt bundle** (`tools/build-library-bundle.sh`, see
 [LIBRARIES.md](LIBRARIES.md)) rather than `psp-pacman -S`. The bundle path
 doesn't need pacman to work at all, so it's the recommended route
-regardless of how the above follow-ups land.
+regardless of how `psp-pacman` lands.
 
 ### `pspsh` + `usbhostfs_pc` — USB host-link debugging
 
@@ -177,7 +186,7 @@ or macOS builds. The diff against upstream is small:
 
 | File | Change |
 |---|---|
-| `prepare.sh` | Detect `MSYS_NT*` / `MINGW*` / `UCRT64*`; install host deps via `pacman` (correct package names, `--overwrite` for the autoconf `.info` conflict, `python3`/`pip3` symlink fallback, `libgpg-error-devel`). |
+| `prepare.sh` | Detect `MSYS_NT*` / `MINGW*` / `UCRT64*`; install host deps via `pacman` (correct package names, `--overwrite` for the autoconf `.info` conflict, `python3`/`pip3` symlink fallback, `libgpg-error-devel`, `libgpgme-devel`, `libcurl-devel`). |
 | `scripts/001-psptoolchain.sh` | On Windows, build the allegrex toolchain; clone `psp-pacman` directly, inject our destdir patch, run `pacman.sh`; then build `psptoolchain-extra` steps 2+3 (pkg-config + cmake). |
 | `patches/psp-pacman/fix-destdir-double-slash.patch` | One-character meson.build patch that fixes the `$DESTDIR/<abs>` → `//<abs>` UNC bug breaking `ninja install` on MSYS2. |
 | `scripts/004-psplinkusb-extra.sh` | Widen the host-tools skip from `MINGW*` only to `MINGW*` / `MSYS_*` / `UCRT64*` (upstream's check missed the MSYS shell's `uname`). |
