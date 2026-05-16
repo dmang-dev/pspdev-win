@@ -26,7 +26,8 @@ PSP executable.
 | `pspsdk` | ✅ builds & installs | all `libpsp*.a`, headers, samples, host tools (`psp-prxgen`, `pack-pbp`, `mksfoex`, …) |
 | `psplinkusb` — `libpsplink`, `psplink_boot.prx` | ✅ builds & installs | the on-PSP debug stub |
 | `ebootsigner` | ✅ builds & installs | EBOOT signing tool |
-| `psp-pacman` / `psp-packages` | ⏭️ skipped | prebuilt-library package manager — see [Roadmap](#whats-skipped-and-why) |
+| `psp-pacman` | ✅ builds & installs | binary runs, parses config; `-S` install path still needs follow-up (see below) |
+| `psp-packages` | ⏭️ via bundle | shipped as one zip via [`tools/build-library-bundle.sh`](LIBRARIES.md), not via `psp-pacman -S` |
 | `psplinkusb` — `pspsh`, `usbhostfs_pc` | ⏭️ skipped | USB host-link debug tools — see [Roadmap](#whats-skipped-and-why) |
 
 The result is a complete PSP homebrew toolchain: C and C++ cross-compiler,
@@ -112,28 +113,41 @@ To turn an `.elf` into a runnable `EBOOT.PBP`, use the standard pspsdk
 
 ---
 
-## What's skipped, and why
+## What's partial / skipped
 
-Three pieces are deliberately skipped on Windows. **None of them block building
-PSP homebrew** — but here's exactly what you give up, and how fixable each is.
+### `psp-pacman` — builds now, full `-S` install path still WIP
 
-### `psp-pacman` + `psp-packages` — prebuilt PSP libraries
+Upstream pacman's `meson.build` does
+`mkdir -p "$DESTDIR/<abs-path>"` in its install step. When `DESTDIR` is
+empty (the typical case), MSYS2 sees `//<abs-path>` and interprets the
+leading `//` as a UNC share prefix, failing with
+`cannot create directory '//i': Read-only file system`. Linux's `mkdir`
+treats `//` like `/` so the bug never surfaces there.
 
-`psp-packages` is a set of PSP ports of common libraries (SDL2, zlib, libpng,
-freetype, libvorbis, …); `psp-pacman` is the host-side package manager that
-installs them (`psp-pacman -S sdl2`). Neither is needed for core homebrew
-development on pspsdk — they only matter once you want third-party libraries.
+The `windows-port` branch of our pspdev fork now ships a one-character
+patch (`patches/psp-pacman/fix-destdir-double-slash.patch`) that drops
+the slash between `$DESTDIR` and the absolute path — the standard
+Autotools `$(DESTDIR)$(prefix)` pattern, identical behavior on Linux/macOS,
+correct behavior on MSYS2. With this in place, `psp-pacman` builds, installs
+to `$PSPDEV/share/pacman/bin/`, runs, and parses its config file.
 
-- **You lose, today:** one-command install of those prebuilt libraries via
-  `psp-pacman`.
-- **You keep:** *all* core homebrew dev on pspsdk; this is the only
-  meaningful gap.
-- **Path forward:** following MinPSPW, this repo plans to ship a single
-  prebuilt **library bundle** per release — extract one zip into `$PSPDEV`,
-  done. The build script + GitHub Actions workflow are already in tree
-  (`tools/build-library-bundle.sh`, `.github/workflows/build-libraries.yml`);
-  the first bundle hasn't shipped yet. See [LIBRARIES.md](LIBRARIES.md) for
-  the design and status.
+What still doesn't work end-to-end:
+
+- **No `gpgme` linked in.** Our MSYS2 build doesn't pull
+  `libgpgme-devel`, so pacman is built without signature support. The
+  default `pacman.conf` ships `SigLevel = Optional TrustAll`, which a
+  no-signature-support pacman rejects as an invalid option. Fix: install
+  `libgpgme-devel` in `prepare.sh`, rebuild. Open follow-up.
+- **`psp-packages` repo URL returns 404.** The configured
+  `https://pspdev.github.io/psp-packages/psp/pspdev.db` doesn't exist
+  at that path. May be a stale config or a path-layout change upstream.
+  Open follow-up.
+
+For actually shipping libraries to users, this repo uses a **single
+prebuilt bundle** (`tools/build-library-bundle.sh`, see
+[LIBRARIES.md](LIBRARIES.md)) rather than `psp-pacman -S`. The bundle path
+doesn't need pacman to work at all, so it's the recommended route
+regardless of how the above follow-ups land.
 
 ### `pspsh` + `usbhostfs_pc` — USB host-link debugging
 
@@ -164,7 +178,8 @@ or macOS builds. The diff against upstream is small:
 | File | Change |
 |---|---|
 | `prepare.sh` | Detect `MSYS_NT*` / `MINGW*` / `UCRT64*`; install host deps via `pacman` (correct package names, `--overwrite` for the autoconf `.info` conflict, `python3`/`pip3` symlink fallback, `libgpg-error-devel`). |
-| `scripts/001-psptoolchain.sh` | On Windows, build the allegrex toolchain, then build `psptoolchain-extra` *without* `psp-pacman` (steps 2 3). |
+| `scripts/001-psptoolchain.sh` | On Windows, build the allegrex toolchain; clone `psp-pacman` directly, inject our destdir patch, run `pacman.sh`; then build `psptoolchain-extra` steps 2+3 (pkg-config + cmake). |
+| `patches/psp-pacman/fix-destdir-double-slash.patch` | One-character meson.build patch that fixes the `$DESTDIR/<abs>` → `//<abs>` UNC bug breaking `ninja install` on MSYS2. |
 | `scripts/004-psplinkusb-extra.sh` | Widen the host-tools skip from `MINGW*` only to `MINGW*` / `MSYS_*` / `UCRT64*` (upstream's check missed the MSYS shell's `uname`). |
 | `scripts/003-psp-packages.sh` | Cleanly skip on MSYS2 with a clear message; `-LocalPackageBuild` escape hatch preserved. |
 | `depends/check-dependencies.sh` | Skip the `gpgme-tool` check on MSYS2 (not packaged there; only used by the skipped `psp-pacman`). |
