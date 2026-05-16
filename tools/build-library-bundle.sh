@@ -8,6 +8,11 @@
 #   - PSPDEV set, with psp-gcc and psp-pkg-config on PATH
 #   - cmake, make, curl, sha256sum, tar, unzip, zip, git, python3 in PATH (MSYS2 ships all)
 #
+# Side effect: this script installs each successfully-built library into
+# $PSPDEV/psp/ as it goes — required so subsequent libraries can find the
+# ones they depend on (find_package, pkg-config). The same end state results
+# when a user extracts the produced zip over their $PSPDEV install.
+#
 # Usage:
 #   tools/build-library-bundle.sh [--packages "<list>"] [--bundle-version vN]
 #                                 [--output dist/] [--keep-work]
@@ -106,9 +111,10 @@ preflight() {
     pkg_for[zip]=zip
     pkg_for[git]=git
     pkg_for[python3]=python
+    pkg_for[dos2unix]=dos2unix
 
     local missing=() missing_pkgs=()
-    for tool in psp-gcc psp-pkg-config cmake make curl sha256sum tar unzip zip git python3; do
+    for tool in psp-gcc psp-pkg-config cmake make curl sha256sum tar unzip zip git python3 dos2unix; do
         if ! command -v "$tool" >/dev/null 2>&1; then
             missing+=("$tool")
             if [ -n "${pkg_for[$tool]:-}" ]; then
@@ -147,17 +153,48 @@ preflight() {
 
 # === psp-packages checkout ===
 
+# Force a git working tree to LF line endings.
+#
+# Two distinct problems we have to handle:
+#   1. The user's global core.autocrlf=true (typical on Windows) causes git
+#      to convert LF -> CRLF on checkout. We override locally.
+#   2. Some upstream repos commit files with CRLF *in the blob itself* (tremor
+#      does this for Version_script.in). PSPBUILD patches were generated
+#      against LF versions, so context lines don't match the CRLF tree files.
+#      Neither `core.autocrlf=false` nor `eol=lf` attributes help here — git
+#      faithfully extracts whatever bytes are in the blob.
+#
+# So we re-extract the working tree fresh with autocrlf=false (handles
+# problem 1), then run dos2unix over it (handles problem 2). dos2unix has
+# built-in binary detection and skips non-text files automatically.
+git_force_lf_working_tree() {
+    local dir="$1"
+    git -C "$dir" config core.autocrlf false
+    git -C "$dir" config core.eol lf
+    # Wipe working tree and re-extract from index.
+    find "$dir" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+    git -C "$dir" checkout-index --force --all --quiet
+    # Convert CRLF -> LF for every text file (handles upstream-committed CRLF).
+    # Errors on individual files are non-fatal: dos2unix is a hint, not a hard
+    # requirement, and a single binary-but-misidentified file shouldn't kill
+    # the whole bundle.
+    find "$dir" -type f ! -path "*/.git/*" -size -10M -print0 \
+        | xargs -0 -r dos2unix --quiet 2>/dev/null || true
+}
+
 prepare_psp_packages() {
     local pkg_repo_dir="$1"
     if [ ! -d "$pkg_repo_dir/.git" ]; then
         info "Cloning psp-packages → $pkg_repo_dir"
-        git clone "$PSP_PACKAGES_REPO" "$pkg_repo_dir"
+        git clone -c core.autocrlf=false -c core.eol=lf \
+            "$PSP_PACKAGES_REPO" "$pkg_repo_dir"
     else
         info "Updating psp-packages in $pkg_repo_dir"
-        git -C "$pkg_repo_dir" fetch --tags origin
+        git -C "$pkg_repo_dir" fetch --tags --quiet origin
     fi
     info "Checking out $PSP_PACKAGES_REF"
     git -C "$pkg_repo_dir" checkout --quiet "$PSP_PACKAGES_REF"
+    git_force_lf_working_tree "$pkg_repo_dir"
 }
 
 # === Build order resolution via psp-packages/get_build_order.py ===
@@ -203,32 +240,92 @@ print(" ".join(combined))
 
 # === Per-package build ===
 
-# Fetch one entry from a PSPBUILD source=() array. URLs are downloaded with
-# curl; bare filenames are copied from the PSPBUILD directory.
-fetch_source() {
+# Acquire one entry from a PSPBUILD source=() array — handles:
+#   - https://host/path/archive.tar.gz  -> download + extract
+#   - https://host/path/file.ogg        -> download + cp into $srcdir
+#   - git+https://host/repo.git#commit=<sha>  -> clone + checkout + cp into $srcdir
+#   - localfile.patch                   -> cp from PSPBUILD dir into $srcdir
+#
+# Also supports makepkg's "<localname>::<url>" rename prefix.
+acquire_source() {
     local url="$1"
     local expected_sha="$2"
-    local dest_dir="$3"
-    local pkg_src_dir="$4"
+    local download_dir="$3"   # persists across runs (cache)
+    local src_dir="$4"        # $srcdir — extracted/cloned content lands here
+    local pkg_src_dir="$5"    # path to the PSPBUILD's own directory
 
-    local filename
-    if [[ "$url" =~ ^(http|https|ftp):// ]]; then
-        # Strip any trailing query/fragment for the saved filename.
-        filename="$(basename "${url%%[\?#]*}")"
-        if [ ! -f "$dest_dir/$filename" ]; then
-            info "  fetching $url"
-            curl -fsSL --retry 3 -o "$dest_dir/$filename.part" "$url"
-            mv "$dest_dir/$filename.part" "$dest_dir/$filename"
-        fi
-    else
-        # Local file in the PSPBUILD directory.
-        filename="$url"
-        cp "$pkg_src_dir/$filename" "$dest_dir/$filename"
+    # Strip optional "<localname>::" rename prefix.
+    local rename=""
+    if [[ "$url" =~ ^[A-Za-z0-9_.+-]+:: ]]; then
+        rename="${url%%::*}"
+        url="${url#*::}"
     fi
 
-    if [ "$expected_sha" != "SKIP" ]; then
+    # --- git source ---
+    if [[ "$url" =~ ^git\+ ]]; then
+        local git_url="${url#git+}"
+        local git_ref=""
+        if [[ "$git_url" == *"#"* ]]; then
+            local fragment="${git_url#*#}"
+            git_url="${git_url%%#*}"
+            case "$fragment" in
+                commit=*) git_ref="${fragment#commit=}" ;;
+                tag=*)    git_ref="${fragment#tag=}" ;;
+                branch=*) git_ref="${fragment#branch=}" ;;
+                *) err "unsupported git fragment: $fragment"; exit 1 ;;
+            esac
+        fi
+
+        local dirname="${rename:-$(basename "${git_url%.git}")}"
+        local clone_path="$download_dir/$dirname"
+
+        if [ -d "$clone_path/.git" ]; then
+            info "  updating clone of $git_url"
+            git -C "$clone_path" fetch --tags --quiet origin
+        else
+            info "  cloning $git_url"
+            rm -rf "$clone_path"
+            git clone --quiet -c core.autocrlf=false -c core.eol=lf \
+                "$git_url" "$clone_path"
+        fi
+        if [ -n "$git_ref" ]; then
+            info "  checkout $git_ref"
+            git -C "$clone_path" checkout --quiet "$git_ref"
+        fi
+        # Normalize LF in case the clone predates the autocrlf=false flag.
+        git_force_lf_working_tree "$clone_path"
+
+        # Stage into $srcdir. PSPBUILD prepare/build commonly do `cd "$pkgname"`,
+        # so we keep the same dirname under $srcdir.
+        cp -a "$clone_path" "$src_dir/$dirname"
+        return
+    fi
+
+    # --- http(s)/ftp or local file ---
+    local filename
+    local is_remote=0
+    if [[ "$url" =~ ^(http|https|ftp):// ]]; then
+        is_remote=1
+        filename="${rename:-$(basename "${url%%[\?#]*}")}"
+        if [ ! -f "$download_dir/$filename" ]; then
+            info "  fetching $url"
+            curl -fsSL --retry 3 -o "$download_dir/$filename.part" "$url"
+            mv "$download_dir/$filename.part" "$download_dir/$filename"
+        fi
+    else
+        # Local file living next to the PSPBUILD (typically a .patch or
+        # sample template).
+        filename="${rename:-$url}"
+        cp "$pkg_src_dir/$url" "$download_dir/$filename"
+    fi
+
+    # Verify sha256 only for remote downloads. Local files come from our
+    # psp-packages clone, whose line endings we normalize via dos2unix —
+    # the PSPBUILD's recorded sha256 was computed before that normalization
+    # and will (correctly) no longer match.
+    if [ "$is_remote" = "1" ] && [ "$expected_sha" != "SKIP" ]; then
         local actual
-        actual="$(sha256sum "$dest_dir/$filename" | awk '{print $1}')"
+        actual="$(sha256sum "$download_dir/$filename" | awk '{print $1}')"
         if [ "$actual" != "$expected_sha" ]; then
             err "sha256 mismatch for $filename"
             err "  expected $expected_sha"
@@ -237,20 +334,51 @@ fetch_source() {
         fi
     fi
 
-    echo "$dest_dir/$filename"
+    # Extract archives, copy everything else verbatim.
+    case "$filename" in
+        *.tar.gz|*.tgz)  tar_extract -xzf "$download_dir/$filename" "$src_dir" ;;
+        *.tar.xz)        tar_extract -xJf "$download_dir/$filename" "$src_dir" ;;
+        *.tar.bz2)       tar_extract -xjf "$download_dir/$filename" "$src_dir" ;;
+        *.tar)           tar_extract  -xf "$download_dir/$filename" "$src_dir" ;;
+        *.zip)           unzip -q "$download_dir/$filename" -d "$src_dir" ;;
+        *) cp "$download_dir/$filename" "$src_dir/" ;;  # patches, samples, fonts, ...
+    esac
 }
 
-extract_source() {
-    local archive="$1"
-    local dest_dir="$2"
-    case "$archive" in
-        *.tar.gz|*.tgz)  tar -xzf "$archive" -C "$dest_dir" ;;
-        *.tar.xz)        tar -xJf "$archive" -C "$dest_dir" ;;
-        *.tar.bz2)       tar -xjf "$archive" -C "$dest_dir" ;;
-        *.tar)           tar  -xf "$archive" -C "$dest_dir" ;;
-        *.zip)           unzip -q "$archive" -d "$dest_dir" ;;
-        *) cp "$archive" "$dest_dir/" ;;  # patch / sample / cmake snippet
-    esac
+# tar wrapper that ignores symlink/hardlink creation errors only. These show
+# up on Windows MSYS2 when tarballs contain macOS .framework/ symlinks (e.g.
+# SDL2_mixer ships a vendored SDL2.framework with Versions/Current/Resources
+# symlinks). MSYS2 can't create those symlinks without dev mode, but the
+# missing content is macOS-only and irrelevant to a PSP build. Real errors
+# (corrupt archive, wrong format, etc.) still propagate.
+tar_extract() {
+    local mode="$1" archive="$2" dest_dir="$3"
+    local stderr_file; stderr_file="$(mktemp)"
+
+    if tar "$mode" "$archive" -C "$dest_dir" 2>"$stderr_file"; then
+        rm -f "$stderr_file"
+        return 0
+    fi
+
+    # tar exited non-zero. Filter for any tar: errors that aren't
+    # symlink/hardlink related.
+    local non_link_errors
+    non_link_errors="$(grep '^tar:' "$stderr_file" | \
+        grep -vE '(Cannot create (symlink|hardlink)|Cannot hard link|Exiting with failure status)' \
+        || true)"
+
+    if [ -n "$non_link_errors" ]; then
+        echo "$non_link_errors" >&2
+        rm -f "$stderr_file"
+        return 1
+    fi
+
+    local n_skipped
+    n_skipped="$(grep -cE 'Cannot create (symlink|hardlink)|Cannot hard link' "$stderr_file" \
+        2>/dev/null || echo 0)"
+    info "  (tar: $n_skipped symlink/hardlink(s) skipped — Windows limitation, not needed for PSP build)"
+    rm -f "$stderr_file"
+    return 0
 }
 
 build_one_package() {
@@ -268,7 +396,10 @@ build_one_package() {
     info "=== Building $pkgname ==="
 
     local pkg_work="$work_root/$pkgname"
-    rm -rf "$pkg_work"
+    # Preserve the download cache across builds so git clones / tarballs
+    # don't need to be re-fetched on iteration. src/ and pkg/ DO get wiped
+    # for a clean build each time.
+    rm -rf "$pkg_work/src" "$pkg_work/pkg"
     mkdir -p "$pkg_work/src" "$pkg_work/pkg" "$pkg_work/download"
 
     # Run the PSPBUILD in a subshell so its vars/functions don't pollute us.
@@ -279,6 +410,93 @@ build_one_package() {
         export startdir="$pkg_src_dir"
         export XTRA_OPTS=()
         export MAKEFLAGS="${MAKEFLAGS:--j$(nproc 2>/dev/null || echo 2)}"
+
+        # Shim `patch` to handle git-format renames. Two real tools both
+        # fail:
+        #   - GNU patch 2.7.6 on MSYS2 doesn't reliably finalize renames
+        #     (leaves `configure.ac.od0AHqd`-style temp files), so later
+        #     hunks for the renamed file can't find it.
+        #   - `git apply` does a strict whole-patch dry-run; later hunks
+        #     reference paths that only exist AFTER the rename, so the
+        #     dry-run fails before any operation runs.
+        # Solution: preprocess the patch ourselves. Extract rename pairs,
+        # perform the mv on disk, strip the rename/similarity directives,
+        # and rewrite the diff/--- /+++ path headers to reference the new
+        # name. Real `patch` then sees a rename-free diff and applies
+        # cleanly. (Hits tremor's sezero.patch.)
+        patch() {
+            local tmp; tmp="$(mktemp)"
+            cat > "$tmp"
+            local rc
+
+            if grep -qE '^rename (from|to) ' "$tmp"; then
+                local tmp2 renames_csv
+                tmp2="$(mktemp)"
+                renames_csv="$(mktemp)"
+
+                python3 -c '
+import re, sys
+src = open(sys.argv[1]).read()
+out_path = sys.argv[2]
+renames_path = sys.argv[3]
+
+lines = src.split("\n")
+renames = []
+out = []
+i = 0
+while i < len(lines):
+    line = lines[i]
+    if line.startswith("similarity index "):
+        i += 1
+        continue
+    if line.startswith("rename from "):
+        f = line[12:]
+        if i + 1 < len(lines) and lines[i + 1].startswith("rename to "):
+            t = lines[i + 1][10:]
+            renames.append((f, t))
+            i += 2
+            continue
+    out.append(line)
+    i += 1
+
+text = "\n".join(out)
+for f, t in renames:
+    text = re.sub(
+        rf"^(diff --git a/){re.escape(f)}( b/){re.escape(t)}$",
+        rf"\g<1>{t}\g<2>{t}", text, flags=re.MULTILINE)
+    text = re.sub(
+        rf"^--- a/{re.escape(f)}$", f"--- a/{t}",
+        text, flags=re.MULTILINE)
+    text = re.sub(
+        rf"^\+\+\+ b/{re.escape(f)}$", f"+++ b/{t}",
+        text, flags=re.MULTILINE)
+open(out_path, "w").write(text)
+with open(renames_path, "w") as fh:
+    for f, t in renames:
+        fh.write(f"{f}\t{t}\n")
+' "$tmp" "$tmp2" "$renames_csv"
+
+                # Perform the renames the patch declared, before invoking
+                # real `patch` on the rename-free version.
+                while IFS=$'\t' read -r from to; do
+                    if [ -e "$from" ]; then
+                        mkdir -p "$(dirname "$to")"
+                        mv "$from" "$to"
+                    fi
+                done < "$renames_csv"
+
+                command patch "$@" < "$tmp2"
+                rc=$?
+                rm -f "$tmp2" "$renames_csv"
+            else
+                command patch "$@" < "$tmp"
+                rc=$?
+            fi
+
+            rm -f "$tmp"
+            return $rc
+        }
+        export -f patch
 
         # PSPBUILDs assume their own cwd is the package dir while building.
         cd "$pkg_src_dir"
@@ -297,9 +515,7 @@ build_one_package() {
             if [ "${#sha256sums[@]}" -gt "$i" ]; then
                 sha="${sha256sums[$i]}"
             fi
-            local fetched
-            fetched="$(fetch_source "$src_url" "$sha" "$pkg_work/download" "$pkg_src_dir")"
-            extract_source "$fetched" "$srcdir"
+            acquire_source "$src_url" "$sha" "$pkg_work/download" "$srcdir" "$pkg_src_dir"
             i=$((i + 1))
         done
 
@@ -307,23 +523,33 @@ build_one_package() {
         # commonly do `cd "${pkgname}-${pkgver}"` in *both* prepare() and
         # build(), which only works if we reset between calls. Wrap each
         # function in a subshell with `set +u` (PSPBUILDs reference optional
-        # vars) and a fresh `cd "$srcdir"`.
+        # vars), a fresh `cd "$srcdir"`, and stdin redirected from /dev/null
+        # so anything that would prompt (e.g. `patch` asking "File to patch:")
+        # fails fast instead of hanging on the user's terminal.
         if declare -F prepare >/dev/null; then
             info "  prepare()"
-            ( cd "$srcdir"; set +u; prepare )
+            ( cd "$srcdir"; set +u; prepare ) </dev/null
         fi
 
         info "  build()"
-        ( cd "$srcdir"; set +u; build )
+        ( cd "$srcdir"; set +u; build ) </dev/null
 
         info "  package()"
-        ( cd "$srcdir"; set +u; package )
+        ( cd "$srcdir"; set +u; package ) </dev/null
     )
 
-    # Merge the package's $pkgdir/psp/ tree into the bundle staging area.
+    # Merge the package's $pkgdir/psp/ tree into the bundle staging area
+    # AND into the real $PSPDEV/psp/. The latter step matches what
+    # `psp-pacman -U pkg.tar.gz` does between packages in the normal flow:
+    # subsequent libraries' `find_package(ZLIB)` / pkg-config lookups expect
+    # to discover their deps under $PSPDEV/psp, not under our staging area.
+    # Side effect: this script populates $PSPDEV with the bundle's libraries
+    # as it goes. That's the same end state the user gets when they extract
+    # the resulting zip anyway.
     if [ -d "$pkg_work/pkg/psp" ]; then
         mkdir -p "$stage_root/psp"
         cp -a "$pkg_work/pkg/psp/." "$stage_root/psp/"
+        cp -a "$pkg_work/pkg/psp/." "$PSPDEV/psp/"
     else
         err "$pkgname produced no psp/ tree under \$pkgdir — install path mismatch?"
         return 1

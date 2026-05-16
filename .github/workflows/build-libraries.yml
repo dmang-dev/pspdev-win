@@ -60,6 +60,7 @@ jobs:
             cmake
             curl
             python
+            dos2unix
 
       - name: Resolve pspdev fork commit (for cache key)
         id: pspdev-rev
