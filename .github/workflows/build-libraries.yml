@@ -101,8 +101,14 @@ jobs:
       - name: Build library bundle
         working-directory: pspdev-win
         run: |
-          export PSPDEV="$(pwd -W 2>/dev/null || pwd)/install"
+          # Use unix-style $(pwd), not $(pwd -W) — MSYS2 bash's PATH lookup
+          # is reliable for unix paths and flaky for Windows-style paths
+          # with forward slashes. (Matches how the script is invoked
+          # locally per the README.)
+          export PSPDEV="$(pwd)/install"
           export PATH="$PSPDEV/bin:$PATH"
+          echo "PSPDEV=$PSPDEV"
+          ls "$PSPDEV/bin/" | head -20
           psp-gcc --version
           tools/build-library-bundle.sh \
             --bundle-version "${{ inputs.bundle_version }}" \
