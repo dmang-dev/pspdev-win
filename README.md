@@ -10,6 +10,21 @@ One PowerShell command takes you from a clean Windows box to a working
 .\bootstrap-windows.ps1
 ```
 
+Need the 16-library Tier 1 bundle (SDL2, freetype, libpng, …) too? After
+the toolchain is installed, extract the
+[`libs-v1` release](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1)
+on top of it:
+
+```powershell
+Invoke-WebRequest -Uri https://github.com/dmang-dev/pspdev-win/releases/download/libs-v1/pspdev-win-libraries-15.2.0-v1.zip -OutFile libs.zip
+Expand-Archive libs.zip -DestinationPath $env:PSPDEV
+```
+
+Same layout `psp-pacman -S sdl2 sdl2-image …` would produce, as a single
+8.9 MB offline-installable archive. See
+[the release notes](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1)
+for the full library list, versions, and licenses.
+
 ---
 
 ## Status — verified working
