@@ -1,29 +1,137 @@
 # pspdev-win
 
-Build the [**pspdev**](https://github.com/pspdev/pspdev) PSP homebrew toolchain
-natively on **Windows**, under MSYS2 — no WSL, no Docker, no Linux VM.
+[![Latest release](https://img.shields.io/github/v/release/dmang-dev/pspdev-win?label=release)](https://github.com/dmang-dev/pspdev-win/releases/latest)
+[![Toolchain](https://img.shields.io/badge/psp--gcc-15.2.0-blue)](https://github.com/dmang-dev/pspdev-win/releases/tag/v1)
+[![Libraries](https://img.shields.io/badge/Tier_1_libs-16_included-success)](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1)
 
-One PowerShell command takes you from a clean Windows box to a working
-`psp-gcc` that compiles real PlayStation Portable executables.
+PSP homebrew toolchain for **Windows**, native MSYS2-hosted — no WSL, no
+Docker, no Linux VM. `psp-gcc 15.2.0` (C + C++), the full pspsdk, all the
+standard host tools (`psp-prxgen`, `pack-pbp`, `mksfoex`, …), `psp-pacman`,
+and 16 Tier 1 libraries (SDL2, freetype, libpng, …) — packaged as a
+**122 MB prebuilt zip**.
+
+---
+
+## Install in 5 minutes
+
+### 1. Install MSYS2
+
+Download from <https://www.msys2.org> and install to `C:\msys64` (the default).
+The toolchain produces Cygwin-hosted binaries that depend on `msys-2.0.dll`
+at runtime; nothing else from MSYS2 is needed.
+
+> Already have MSYS2 somewhere else? Just substitute its path everywhere
+> you see `C:\msys64` below.
+
+### 2. Download and extract the toolchain
 
 ```powershell
-.\bootstrap-windows.ps1
+Invoke-WebRequest `
+  -Uri https://github.com/dmang-dev/pspdev-win/releases/download/v1/pspdev-win-15.2.0-v1.zip `
+  -OutFile pspdev-win.zip
+Expand-Archive pspdev-win.zip -DestinationPath C:\pspdev
 ```
 
-Need the 16-library Tier 1 bundle (SDL2, freetype, libpng, …) too? After
-the toolchain is installed, extract the
-[`libs-v1` release](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1)
-on top of it:
+That's the toolchain (`psp-gcc`, pspsdk, 30+ host tools) **plus** all 16 Tier 1
+libraries — one download, one extract.
+
+### 3. Add to PATH
+
+**Permanent (recommended):**
 
 ```powershell
-Invoke-WebRequest -Uri https://github.com/dmang-dev/pspdev-win/releases/download/libs-v1/pspdev-win-libraries-15.2.0-v1.zip -OutFile libs.zip
-Expand-Archive libs.zip -DestinationPath $env:PSPDEV
+[Environment]::SetEnvironmentVariable("PSPDEV", "C:\pspdev", "User")
+$existing = [Environment]::GetEnvironmentVariable("Path", "User")
+[Environment]::SetEnvironmentVariable(
+  "Path", "C:\pspdev\bin;C:\msys64\usr\bin;$existing", "User"
+)
+# Restart your shell after this.
 ```
 
-Same layout `psp-pacman -S sdl2 sdl2-image …` would produce, as a single
-8.9 MB offline-installable archive. See
-[the release notes](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1)
-for the full library list, versions, and licenses.
+**Just this shell:**
+
+```powershell
+$env:PSPDEV = "C:\pspdev"
+$env:Path = "$env:PSPDEV\bin;C:\msys64\usr\bin;$env:Path"
+```
+
+### 4. Verify
+
+```powershell
+psp-gcc --version
+# psp-gcc (GCC) 15.2.0
+```
+
+### 5. Compile hello world
+
+Save these two files into an empty directory:
+
+```c
+// hello.c
+#include <pspkernel.h>
+#include <pspdebug.h>
+
+PSP_MODULE_INFO("hello", 0, 1, 0);
+PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER);
+
+int main(void) {
+    pspDebugScreenInit();
+    pspDebugScreenPrintf("Hello from a Windows-built PSP binary.\n");
+    sceKernelSleepThread();
+    return 0;
+}
+```
+
+```makefile
+# Makefile
+TARGET   = hello
+OBJS     = hello.o
+CFLAGS   = -O2 -G0 -Wall
+LIBS     = -lpspdebug -lpspdisplay -lpspge -lpspctrl
+
+EXTRA_TARGETS   = EBOOT.PBP
+PSP_EBOOT_TITLE = Hello
+
+PSPSDK = $(shell psp-config --pspsdk-path)
+include $(PSPSDK)/lib/build.mak
+```
+
+Build it from an MSYS2 shell (or any shell with the PATH set above):
+
+```bash
+make
+# psp-gcc ... -c -o hello.o hello.c
+# psp-gcc ... -o hello.elf hello.o ...
+# psp-fixup-imports hello.elf
+# mksfoex -d MEMSIZE=1 'Hello' PARAM.SFO
+# psp-strip hello.elf -o hello_strip.elf
+# pack-pbp EBOOT.PBP PARAM.SFO ...
+```
+
+You now have **`EBOOT.PBP`** — drop it on a memory stick at
+`/PSP/GAME/hello/EBOOT.PBP` and launch from the XMB, or open it in
+[PPSSPP](https://www.ppsspp.org/) to test on desktop.
+
+> **Real-world examples** built with this exact toolchain:
+> [hash-bench-psp](https://github.com/dmang-dev/hash-bench-psp) (32-algorithm
+> crypto benchmark),
+> [totp-psp](https://github.com/dmang-dev/totp-psp) (RFC 6238 TOTP
+> authenticator),
+> [btc-miner-psp](https://github.com/dmang-dev/btc-miner-psp) (Bitcoin
+> Stratum-v1 pool miner with TLS).
+
+---
+
+## Releases
+
+| Release | Size | What's in it |
+|---|---:|---|
+| **[`v1`](https://github.com/dmang-dev/pspdev-win/releases/tag/v1)** *(recommended)* | 122 MB | Toolchain + 16 Tier 1 libraries (everything you need) |
+| [`libs-v1`](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1) | 8.9 MB | Just the 16 libraries (overlay on top of an existing pspdev install) |
+
+`v1` is what 90 % of users want. `libs-v1` exists for the case where you already
+have a working pspdev install (Linux, macOS, WSL, or a previous Windows build)
+and just need the prebuilt libraries.
 
 ---
 
@@ -62,7 +170,15 @@ to build essentially any PSP homebrew that doesn't depend on the prebuilt
 
 ---
 
-## Requirements
+## Build from source
+
+> **Most users don't need this.** The [`v1` release](https://github.com/dmang-dev/pspdev-win/releases/tag/v1)
+> is byte-identical to what this section produces, just without the 30-90
+> minute wait. Use the build-from-source path when you want a different
+> psp-gcc version, are hacking on the pspdev fork itself, or want to
+> verify reproducibility.
+
+### Requirements
 
 - **Windows 10/11 x64**
 - **Standalone MSYS2** from <https://www.msys2.org/> (extract
@@ -85,9 +201,7 @@ non-C: drive).
 > Installing standalone MSYS2 alongside an existing devkitPro install
 > works fine — they don't conflict.
 
----
-
-## Quick start
+### Run the bootstrap
 
 ```powershell
 git clone https://github.com/dmang-dev/pspdev-win.git
@@ -103,7 +217,9 @@ cd pspdev-win
 The bootstrap script clones the patched pspdev fork
 ([`dmang-dev/pspdev`](https://github.com/dmang-dev/pspdev), `windows-port`
 branch) into `pspdev/` next to itself, then drives the build inside MSYS2.
-The toolchain installs to `.\install` by default.
+The toolchain installs to `.\install` by default — point `PSPDEV` and PATH
+at that directory the same way the install section above describes (just
+substitute `$PWD\install` for `C:\pspdev`).
 
 ### Options
 
@@ -115,25 +231,9 @@ The toolchain installs to `.\install` by default.
 | `-Msys2Root <path>` | Override MSYS2 auto-detection. |
 | `-LocalPackageBuild` | Build `psp-packages` from source instead of skipping it (slow, fragile, see roadmap). |
 
-### Use the toolchain
-
-```powershell
-[Environment]::SetEnvironmentVariable("PSPDEV", "$PWD\install", "User")
-[Environment]::SetEnvironmentVariable("PATH", "$env:PATH;$PWD\install\bin", "User")
-```
-
-Then from an MSYS2 shell (or any shell with the MSYS2 `usr\bin` also on PATH):
-
-```bash
-psp-gcc --version          # -> psp-gcc (GCC) 15.2.0
-psp-gcc -I$PSPDEV/psp/sdk/include -L$PSPDEV/psp/sdk/lib hello.c \
-    -lpspdebug -lpspdisplay -lpspge -lpspctrl -lpspsdk -lpspkernel \
-    -o hello.elf
-```
-
-To turn an `.elf` into a runnable `EBOOT.PBP`, use the standard pspsdk
-`build.mak` flow — `psp-prxgen`, `mksfoex`, `pack-pbp` are all in
-`$PSPDEV/bin`. Test in [PPSSPP](https://www.ppsspp.org/) or on real hardware.
+The exact same script runs in CI via the
+[`Build library bundle`](.github/workflows/build-library-bundle.yml) workflow,
+which is what produces the `libs-v1` release.
 
 ---
 
@@ -230,6 +330,22 @@ This repo (`pspdev-win`) is just the **Windows entry point**:
 ---
 
 ## Troubleshooting
+
+### Installing the prebuilt release
+
+- **`psp-gcc: command not found`** — `C:\pspdev\bin` isn't on PATH. Re-run
+  step 3 in [Install](#install-in-5-minutes), and if you used the permanent
+  variant, restart your shell so the new PATH is picked up.
+- **`msys-2.0.dll was not found`** — MSYS2 isn't installed, or `C:\msys64\usr\bin`
+  isn't on PATH. The toolchain produces Cygwin-hosted binaries; they need the
+  MSYS2 runtime DLL even though they don't use anything else from MSYS2.
+- **Different MSYS2 location** — if you installed MSYS2 to `C:\msys2` or
+  another drive, substitute that path everywhere `C:\msys64` appears in the
+  install instructions.
+- **`make: command not found`** when building hello world — `make` is from
+  MSYS2's `usr/bin`; same PATH fix as `msys-2.0.dll` above.
+
+### Building from source
 
 - **`bash\r: command not found` / `\r` errors** — CRLF line endings. The
   driver auto-normalizes the `pspdev/` clone, but not the sub-clones the build
