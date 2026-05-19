@@ -1,20 +1,34 @@
-name: Build library bundle
+name: Build release bundles
 
-# Manually-triggered build of a prebuilt PSP library zip (SDL2, zlib, libpng,
-# freetype, libogg/libvorbis, ...) — see LIBRARIES.md for design.
+# Manually-triggered build of pspdev-win release artifacts.
 #
-# Workflow does not run on push. Library bundles are curated releases,
-# not every-commit artifacts. Trigger from the Actions tab.
+# Produces TWO zips per run:
+#
+#   pspdev-win-libraries-<gcc>-<ver>.zip   — just the 16 Tier 1 libs.
+#                                            For users who already have a
+#                                            pspdev install (Linux, macOS,
+#                                            WSL) and want the libs on top.
+#
+#   pspdev-win-<gcc>-<ver>.zip             — toolchain + libs, the full
+#                                            "Windows install in 5 minutes"
+#                                            artifact. This is the headline
+#                                            release.
+#
+# Optionally creates a unified GitHub Release tagged with the bundle version
+# (e.g. `v2`) carrying both zips as assets.
+#
+# Workflow does not run on push. Releases are curated, not every-commit.
+# Trigger from the Actions tab.
 
 on:
   workflow_dispatch:
     inputs:
       bundle_version:
-        description: 'Bundle version tag (e.g. v1)'
+        description: 'Bundle version tag (e.g. v2)'
         required: true
         default: 'v0-dev'
       create_release:
-        description: 'Create GitHub Release with the bundle artifact'
+        description: 'Create unified GitHub Release with both bundle zips'
         type: boolean
         default: false
       pspdev_ref:
@@ -130,27 +144,73 @@ jobs:
             --psp-packages-ref "${{ inputs.psp_packages_ref }}" \
             --output "$(pwd)/dist"
 
+      - name: Determine release artifact names
+        id: names
+        working-directory: pspdev-win
+        run: |
+          # Extract psp-gcc version (e.g. "15.2.0") to embed in zip names —
+          # matches the libs-bundle filename convention, lets users see at a
+          # glance which compiler the artifact was built with.
+          gcc_version=$(./install/bin/psp-gcc.exe --version | head -1 | awk '{print $NF}')
+          libs_zip="pspdev-win-libraries-${gcc_version}-${{ inputs.bundle_version }}.zip"
+          toolchain_zip="pspdev-win-${gcc_version}-${{ inputs.bundle_version }}.zip"
+          echo "gcc_version=$gcc_version"   >> "$GITHUB_OUTPUT"
+          echo "libs_zip=$libs_zip"         >> "$GITHUB_OUTPUT"
+          echo "toolchain_zip=$toolchain_zip" >> "$GITHUB_OUTPUT"
+          echo "psp-gcc $gcc_version"
+          echo "libs:      dist/$libs_zip"
+          echo "toolchain: dist/$toolchain_zip"
+
+      - name: Bundle full toolchain (toolchain + libs)
+        working-directory: pspdev-win
+        run: |
+          # Zip the entire install/ tree — psp-gcc, pspsdk, host tools, AND
+          # the libraries that the library-bundle step just installed into
+          # install/psp/lib/. This is the "Windows install in 5 minutes"
+          # artifact: one extract and the user has everything.
+          #
+          # cd into install/ so the zip paths are bin/, psp/, lib/, …
+          # (matches the layout users get when they extract to $PSPDEV).
+          mkdir -p dist
+          (cd install && zip -qr "../dist/${{ steps.names.outputs.toolchain_zip }}" .)
+          ls -lh "dist/${{ steps.names.outputs.toolchain_zip }}"
+
       - name: List bundle contents
         working-directory: pspdev-win
         run: |
           ls -lh dist/
-          echo "--- manifest ---"
-          unzip -p dist/pspdev-win-libraries-*.zip libraries.json | head -200 || true
+          echo "--- libs manifest (libraries.json) ---"
+          unzip -p "dist/${{ steps.names.outputs.libs_zip }}" libraries.json | head -200 || true
+          echo "--- toolchain top-level dirs ---"
+          unzip -l "dist/${{ steps.names.outputs.toolchain_zip }}" | head -20
 
-      - name: Upload bundle artifact
+      - name: Upload library-bundle artifact
         uses: actions/upload-artifact@v4
         with:
           name: pspdev-win-libraries-${{ inputs.bundle_version }}
-          path: pspdev-win/dist/*.zip
+          path: pspdev-win/dist/${{ steps.names.outputs.libs_zip }}
           if-no-files-found: error
           retention-days: 90
 
-      - name: Create GitHub Release
+      - name: Upload toolchain-bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: pspdev-win-${{ inputs.bundle_version }}
+          path: pspdev-win/dist/${{ steps.names.outputs.toolchain_zip }}
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Create unified GitHub Release
         if: inputs.create_release == true
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: libs-${{ inputs.bundle_version }}
-          name: PSP library bundle ${{ inputs.bundle_version }}
+          tag_name: ${{ inputs.bundle_version }}
+          name: pspdev-win ${{ inputs.bundle_version }}
           generate_release_notes: true
-          files: pspdev-win/dist/*.zip
+          # Both zips on one release page. Users pick: full toolchain
+          # (default, what the README recommends) or libraries-only
+          # (existing-pspdev-install case).
+          files: |
+            pspdev-win/dist/${{ steps.names.outputs.libs_zip }}
+            pspdev-win/dist/${{ steps.names.outputs.toolchain_zip }}
           fail_on_unmatched_files: true

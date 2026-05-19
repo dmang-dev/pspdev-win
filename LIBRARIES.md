@@ -182,5 +182,7 @@ export PATH="$PSPDEV/bin:$PATH"
 tools/build-library-bundle.sh --bundle-version v1
 ```
 
-In CI: go to **Actions → Build library bundle → Run workflow**, fill in
-the bundle version, and decide whether to publish a Release.
+In CI: go to **Actions → Build release bundles → Run workflow**, fill in
+the bundle version, and decide whether to publish a Release. The CI
+workflow produces **both** the libs-only zip (this file's subject) and
+a full toolchain+libs zip, and a unified `vN` release carries both.

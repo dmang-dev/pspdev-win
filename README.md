@@ -232,8 +232,10 @@ substitute `$PWD\install` for `C:\pspdev`).
 | `-LocalPackageBuild` | Build `psp-packages` from source instead of skipping it (slow, fragile, see roadmap). |
 
 The exact same script runs in CI via the
-[`Build library bundle`](.github/workflows/build-library-bundle.yml) workflow,
-which is what produces the `libs-v1` release.
+[`Build release bundles`](.github/workflows/build-libraries.yml) workflow,
+which produces both the toolchain+libs zip and the libraries-only zip and
+attaches them to a unified `vN` release. Trigger it from the Actions tab
+when you want to cut a new release.
 
 ---
 
