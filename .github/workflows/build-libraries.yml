@@ -62,7 +62,15 @@ jobs:
         uses: msys2/setup-msys2@v2
         with:
           msystem: MSYS
-          update: true
+          # update: false on purpose — `pacman -Syuu` mid-job can roll
+          # forward msys-* runtime DLL ABIs (e.g. libmpc-3 -> libmpc-4)
+          # between runs, leaving cached toolchain binaries that link
+          # against the OLD DLL name unable to find their deps and
+          # failing with `cannot open shared object file`. Stick with
+          # whatever the runner image ships. (We separately bundle the
+          # required msys-* DLLs into install/bin/ below to make the
+          # toolchain self-contained regardless.)
+          update: false
           # prepare.sh installs the heavy toolchain build deps via pacman.
           # Here we pre-install only what the bundle script itself needs
           # beyond base-devel (zip/unzip/cmake/python/curl).
@@ -98,7 +106,12 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: pspdev-win/install
-          key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}
+          # `-v2` salt: bumped 2026-05-19 to bust the May-16 cache whose
+          # cached install/ links against a libmpc ABI that no longer exists
+          # in current MSYS2. New caches include bundled MSYS2 runtime DLLs
+          # (see "Bundle MSYS2 runtime DLLs" step) so future ABI drift won't
+          # require another bump.
+          key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}-v2
 
       - name: Build toolchain (cache miss only)
         id: build-toolchain
@@ -125,7 +138,50 @@ jobs:
         uses: actions/cache/save@v4
         with:
           path: pspdev-win/install
-          key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}
+          # `-v2` salt: bumped 2026-05-19 to bust the May-16 cache whose
+          # cached install/ links against a libmpc ABI that no longer exists
+          # in current MSYS2. New caches include bundled MSYS2 runtime DLLs
+          # (see "Bundle MSYS2 runtime DLLs" step) so future ABI drift won't
+          # require another bump.
+          key: pspdev-toolchain-${{ runner.os }}-${{ steps.pspdev-rev.outputs.commit }}-v2
+
+      - name: Bundle MSYS2 runtime DLLs into install/bin
+        # Runs ALWAYS (not just cache-miss) — cached install/ may predate
+        # this step's introduction. Re-copies are idempotent; overhead is
+        # ~10 MB of file copies, well under the build's noise floor.
+        working-directory: pspdev-win
+        run: |
+          # The 13 MSYS2 runtime DLLs the toolchain actually imports
+          # (computed via `objdump -p` over every .exe/.dll in install/
+          # bin + install/libexec — full list below). Bundling them into
+          # install/bin makes the toolchain portable across MSYS2 versions:
+          # if a user installs a fresh MSYS2 that has e.g. libmpc-4 only,
+          # our cc1.exe still finds its own libmpc-3 in install/bin and
+          # works. Without this, the toolchain breaks whenever MSYS2 rolls
+          # an ABI underneath (which it does, occasionally).
+          deps="msys-2.0.dll msys-expat-1.dll msys-gcc_s-seh-1.dll
+                msys-gmp-10.dll msys-iconv-2.dll msys-intl-8.dll
+                msys-lzma-5.dll msys-mpc-3.dll msys-mpfr-6.dll
+                msys-ncursesw6.dll msys-stdc++-6.dll msys-z.dll
+                msys-zstd-1.dll"
+          # MSYS2 root on the GitHub runner is $RUNNER_TEMP/msys64 (the
+          # actions setup defaults). /usr/bin maps to MSYS2_ROOT/usr/bin.
+          src="/usr/bin"
+          missing=0
+          for d in $deps; do
+            if [ -f "$src/$d" ]; then
+              cp -v "$src/$d" install/bin/
+            else
+              echo "WARN: $src/$d not present in this MSYS2 image" >&2
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo "ERROR: $missing required DLL(s) missing — toolchain will not be portable" >&2
+            exit 1
+          fi
+          echo "--- install/bin/msys-*.dll after bundling ---"
+          ls -l install/bin/msys-*.dll | awk '{print $9, $5}'
 
       - name: Build library bundle
         working-directory: pspdev-win
