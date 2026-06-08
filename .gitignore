@@ -9,7 +9,10 @@
 
 # --- Build output (the installed toolchain, hundreds of MB) ---
 /install/
+/install-vanilla/
 /build/
+# Release zips emitted by tools/build-library-bundle.sh and the CI bundle step.
+/dist/
 
 # --- Local review / prep artifacts (not part of the published repo) ---
 /UPSTREAM-PR.md
