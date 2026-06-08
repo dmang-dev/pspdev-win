@@ -231,6 +231,38 @@ jobs:
           (cd install && zip -qr "../dist/${{ steps.names.outputs.toolchain_zip }}" .)
           ls -lh "dist/${{ steps.names.outputs.toolchain_zip }}"
 
+      - name: Smoke-test the toolchain bundle (compile hello-world)
+        working-directory: pspdev-win
+        run: |
+          # Prove the zip we're about to ship actually works end to end:
+          # extract the full-toolchain bundle into a clean dir (exactly what a
+          # user downloads — NOT our build's install/ tree), point PSPDEV at
+          # it, and build the README hello-world fixture (tools/smoke-test).
+          # Gates the upload — fails the run BEFORE publishing if the bundle is
+          # missing a host tool, a runtime DLL, or any of the four libs the
+          # sample links against (pspdebug/pspdisplay/pspge/pspctrl). Catches
+          # the class of regression where the build "succeeds" but the artifact
+          # is unusable.
+          set -euo pipefail
+          sdk="$(mktemp -d)"
+          unzip -q "dist/${{ steps.names.outputs.toolchain_zip }}" -d "$sdk"
+          export PSPDEV="$sdk"
+          export PATH="$PSPDEV/bin:$PATH"
+          echo "PSPDEV=$PSPDEV"
+          psp-gcc --version
+          echo "pspsdk: $(psp-config --pspsdk-path)"
+
+          work="$(mktemp -d)"
+          cp tools/smoke-test/hello.c tools/smoke-test/Makefile "$work/"
+          make -C "$work"
+
+          if [ ! -f "$work/EBOOT.PBP" ]; then
+            echo "SMOKE TEST FAILED: make did not produce EBOOT.PBP" >&2
+            exit 1
+          fi
+          echo "--- smoke test OK: EBOOT.PBP built from the shipped bundle ---"
+          ls -l "$work/EBOOT.PBP" "$work/hello.elf"
+
       - name: List bundle contents
         working-directory: pspdev-win
         run: |
@@ -238,7 +270,11 @@ jobs:
           echo "--- libs manifest (libraries.json) ---"
           unzip -p "dist/${{ steps.names.outputs.libs_zip }}" libraries.json | head -200 || true
           echo "--- toolchain top-level dirs ---"
-          unzip -l "dist/${{ steps.names.outputs.toolchain_zip }}" | head -20
+          # `|| true`: under `-o pipefail`, `head` closing the pipe early
+          # makes `unzip -l` die with SIGPIPE (exit 141), which previously
+          # failed this cosmetic step and discarded the whole build. Matches
+          # the guard on the libraries.json listing above.
+          unzip -l "dist/${{ steps.names.outputs.toolchain_zip }}" | head -20 || true
 
       - name: Upload library-bundle artifact
         uses: actions/upload-artifact@v4
