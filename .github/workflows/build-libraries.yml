@@ -74,6 +74,16 @@ jobs:
           # prepare.sh installs the heavy toolchain build deps via pacman.
           # Here we pre-install only what the bundle script itself needs
           # beyond base-devel (zip/unzip/cmake/python/curl).
+          #
+          # meson + ninja: the fork's psp-pacman build (setup_build_system in
+          # psp-pacman/common.sh) installs these into a throwaway venv and
+          # activates it before calling `meson build`. That venv path silently
+          # stopped yielding a meson on PATH on the current windows-2022 runner
+          # image, so cold builds died with `meson: command not found` (every
+          # prior run masked it by restoring a cached install/ and skipping the
+          # build). Pre-installing them as msys packages puts a global meson on
+          # PATH so the build resolves regardless of the venv's state. Durable
+          # fix belongs in the fork's prepare.sh — tracked separately.
           install: >-
             base-devel
             git
@@ -83,6 +93,8 @@ jobs:
             curl
             python
             dos2unix
+            meson
+            ninja
 
       - name: Resolve pspdev fork commit (for cache key)
         id: pspdev-rev
