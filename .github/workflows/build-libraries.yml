@@ -54,7 +54,7 @@ jobs:
 
     steps:
       - name: Checkout pspdev-win
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           path: pspdev-win
 
@@ -115,7 +115,7 @@ jobs:
       # bundle step failed we lost 90 minutes of toolchain build on retry.
       - name: Restore toolchain cache
         id: cache-toolchain
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         with:
           path: pspdev-win/install
           # `-v2` salt: bumped 2026-05-19 to bust the May-16 cache whose
@@ -147,7 +147,7 @@ jobs:
         # success/failure, so a flaky bundle step doesn't cost us the
         # toolchain build on the next retry.
         if: always() && steps.cache-toolchain.outputs.cache-hit != 'true' && steps.build-toolchain.conclusion == 'success'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: pspdev-win/install
           # `-v2` salt: bumped 2026-05-19 to bust the May-16 cache whose
@@ -275,6 +275,13 @@ jobs:
           echo "--- smoke test OK: EBOOT.PBP built from the shipped bundle ---"
           ls -l "$work/EBOOT.PBP" "$work/hello.elf"
 
+      - name: Generate SHA256 checksums
+        working-directory: pspdev-win
+        run: |
+          # One SHA256SUMS covering both zips, attached to the release so
+          # users can verify the ~125MB download (`sha256sum -c SHA256SUMS`).
+          (cd dist && sha256sum *.zip | tee SHA256SUMS)
+
       - name: List bundle contents
         working-directory: pspdev-win
         run: |
@@ -317,4 +324,5 @@ jobs:
           files: |
             pspdev-win/dist/${{ steps.names.outputs.libs_zip }}
             pspdev-win/dist/${{ steps.names.outputs.toolchain_zip }}
+            pspdev-win/dist/SHA256SUMS
           fail_on_unmatched_files: true
