@@ -508,9 +508,10 @@ with open(renames_path, "w") as fh:
         source ./PSPBUILD
         set -u
 
-        # Walk source[] / sha256sums[] in parallel. Both arrays are defined by
-        # the PSPBUILD sourced just above (Arch PKGBUILD convention), so
-        # shellcheck can't see their assignment — SC2154 is a false positive.
+        # Walk source[] / sha256sums[] in parallel. Both arrays are populated
+        # by the PSPBUILD sourced just above (Arch PKGBUILD convention), which
+        # static analysis cannot see — so the SC2154 warnings below are false
+        # positives (do not start these comment lines with the directive token).
         local i=0
         # shellcheck disable=SC2154
         for src_url in "${source[@]}"; do
