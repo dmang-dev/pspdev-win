@@ -8,6 +8,8 @@ name: CI
 # broken the release pipeline — workflow YAML, shell scripts, and the
 # PowerShell bootstrap — so a PR gets real signal in ~1-2 min without building
 # anything. No secrets, read-only token.
+#
+# Three independent jobs so each linter reports even if another fails.
 
 on:
   pull_request:
@@ -25,12 +27,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lint:
-    name: workflows + shell
+  shellcheck:
+    name: shellcheck
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-
       # shellcheck ships preinstalled on the ubuntu-24.04 image. Lint every
       # tracked *.sh (the vendored upstream clones are gitignored and absent in
       # a fresh checkout, so this only hits our own scripts). --severity=warning
@@ -43,6 +44,11 @@ jobs:
           printf 'linting: %s\n' "${scripts[@]}"
           shellcheck --severity=warning "${scripts[@]}"
 
+  actionlint:
+    name: actionlint
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
       # actionlint validates workflow YAML: expression syntax, bad `if:`,
       # deprecated runner/label usage, matrix mistakes — the class of bug that
       # silently broke this pipeline before. With shellcheck on PATH it also
@@ -59,7 +65,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-
       # PowerShell Core is preinstalled on the ubuntu image. Gate on Error-level
       # findings (parse errors, real defects); report Warnings without failing
       # so a first run doesn't wall on style. Ratchet to include Warning later
