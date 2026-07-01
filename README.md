@@ -1,14 +1,14 @@
 # pspdev-win
 
 [![Latest release](https://img.shields.io/github/v/release/dmang-dev/pspdev-win?label=release)](https://github.com/dmang-dev/pspdev-win/releases/latest)
-[![Toolchain](https://img.shields.io/badge/psp--gcc-15.2.0-blue)](https://github.com/dmang-dev/pspdev-win/releases/tag/v1)
-[![Libraries](https://img.shields.io/badge/Tier_1_libs-16_included-success)](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1)
+[![Toolchain](https://img.shields.io/badge/psp--gcc-15.2.0-blue)](https://github.com/dmang-dev/pspdev-win/releases/tag/v2)
+[![Libraries](https://img.shields.io/badge/Tier_1_libs-16_included-success)](https://github.com/dmang-dev/pspdev-win/releases/tag/v2)
 
 PSP homebrew toolchain for **Windows**, native MSYS2-hosted — no WSL, no
 Docker, no Linux VM. `psp-gcc 15.2.0` (C + C++), the full pspsdk, all the
 standard host tools (`psp-prxgen`, `pack-pbp`, `mksfoex`, …), `psp-pacman`,
 and 16 Tier 1 libraries (SDL2, freetype, libpng, …) — packaged as a
-**122 MB prebuilt zip**.
+**126 MB prebuilt zip**.
 
 ---
 
@@ -27,7 +27,7 @@ at runtime; nothing else from MSYS2 is needed.
 
 ```powershell
 Invoke-WebRequest `
-  -Uri https://github.com/dmang-dev/pspdev-win/releases/download/v1/pspdev-win-15.2.0-v1.zip `
+  -Uri https://github.com/dmang-dev/pspdev-win/releases/download/v2/pspdev-win-15.2.0-v2.zip `
   -OutFile pspdev-win.zip
 Expand-Archive pspdev-win.zip -DestinationPath C:\pspdev
 ```
@@ -124,14 +124,18 @@ You now have **`EBOOT.PBP`** — drop it on a memory stick at
 
 ## Releases
 
-| Release | Size | What's in it |
-|---|---:|---|
-| **[`v1`](https://github.com/dmang-dev/pspdev-win/releases/tag/v1)** *(recommended)* | 122 MB | Toolchain + 16 Tier 1 libraries (everything you need) |
-| [`libs-v1`](https://github.com/dmang-dev/pspdev-win/releases/tag/libs-v1) | 8.9 MB | Just the 16 libraries (overlay on top of an existing pspdev install) |
+The **[`v2`](https://github.com/dmang-dev/pspdev-win/releases/tag/v2)** release
+carries both downloads as assets:
 
-`v1` is what 90 % of users want. `libs-v1` exists for the case where you already
-have a working pspdev install (Linux, macOS, WSL, or a previous Windows build)
-and just need the prebuilt libraries.
+| Asset | Size | What's in it |
+|---|---:|---|
+| `pspdev-win-15.2.0-v2.zip` *(recommended)* | 126 MB | Toolchain + 16 Tier 1 libraries (everything you need) |
+| `pspdev-win-libraries-15.2.0-v2.zip` | 8.5 MB | Just the 16 libraries (overlay on top of an existing pspdev install) |
+| `SHA256SUMS` | — | Checksums for both zips — verify with `sha256sum -c SHA256SUMS` |
+
+The full zip is what 90 % of users want. The libraries-only zip exists for the
+case where you already have a working pspdev install (Linux, macOS, WSL, or a
+previous Windows build) and just need the prebuilt libraries.
 
 ---
 
@@ -172,7 +176,7 @@ to build essentially any PSP homebrew that doesn't depend on the prebuilt
 
 ## Build from source
 
-> **Most users don't need this.** The [`v1` release](https://github.com/dmang-dev/pspdev-win/releases/tag/v1)
+> **Most users don't need this.** The [`v2` release](https://github.com/dmang-dev/pspdev-win/releases/tag/v2)
 > is byte-identical to what this section produces, just without the 30-90
 > minute wait. Use the build-from-source path when you want a different
 > psp-gcc version, are hacking on the pspdev fork itself, or want to
