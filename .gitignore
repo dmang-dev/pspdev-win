@@ -17,6 +17,8 @@
 # --- Local review / prep artifacts (not part of the published repo) ---
 /UPSTREAM-PR.md
 /COMMUNITY-LISTS.md
+# Local per-clone Claude Code working notes; not part of the published repo.
+/CLAUDE.md
 
 # --- Editor / OS / tooling noise ---
 .DS_Store
