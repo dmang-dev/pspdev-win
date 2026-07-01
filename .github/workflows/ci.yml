@@ -1,0 +1,76 @@
+name: CI
+
+# Fast, build-free gate for every PR and every push to main.
+#
+# The heavy toolchain build lives in build-libraries.yml (manual dispatch,
+# ~90 min) and is deliberately NOT run per-commit. This workflow only lints
+# the file types that actually change in this repo and that have historically
+# broken the release pipeline — workflow YAML, shell scripts, and the
+# PowerShell bootstrap — so a PR gets real signal in ~1-2 min without building
+# anything. No secrets, read-only token.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# A newer push to the same ref cancels an in-flight run — no point linting a
+# commit that's already been superseded.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: workflows + shell
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      # shellcheck ships preinstalled on the ubuntu-24.04 image. Lint every
+      # tracked *.sh (the vendored upstream clones are gitignored and absent in
+      # a fresh checkout, so this only hits our own scripts). --severity=warning
+      # skips pure style nits but still catches real bugs (unquoted expansions,
+      # missing `cd ||`, etc.).
+      - name: shellcheck (tracked *.sh)
+        run: |
+          shellcheck --version
+          mapfile -t scripts < <(git ls-files '*.sh')
+          printf 'linting: %s\n' "${scripts[@]}"
+          shellcheck --severity=warning "${scripts[@]}"
+
+      # actionlint validates workflow YAML: expression syntax, bad `if:`,
+      # deprecated runner/label usage, matrix mistakes — the class of bug that
+      # silently broke this pipeline before. With shellcheck on PATH it also
+      # lints every `run:` block. Installed via `go install` (Go is preinstalled
+      # on the image) pinned to a tag and checksum-verified through the Go
+      # module proxy — no `curl | bash`.
+      - name: actionlint (.github/workflows)
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+          "$(go env GOPATH)/bin/actionlint" -color
+
+  powershell:
+    name: powershell
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      # PowerShell Core is preinstalled on the ubuntu image. Gate on Error-level
+      # findings (parse errors, real defects); report Warnings without failing
+      # so a first run doesn't wall on style. Ratchet to include Warning later
+      # once bootstrap-windows.ps1 is warning-clean.
+      - name: PSScriptAnalyzer (*.ps1)
+        shell: pwsh
+        run: |
+          Set-PSRepository PSGallery -InstallationPolicy Trusted
+          Install-Module PSScriptAnalyzer -Scope CurrentUser -Force
+          $issues = @(Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error,Warning)
+          if ($issues.Count) { $issues | Format-Table -AutoSize | Out-String | Write-Host }
+          $errors = @($issues | Where-Object { $_.Severity -eq 'Error' })
+          Write-Host "PSScriptAnalyzer: $($errors.Count) error(s), $($issues.Count) total finding(s)"
+          if ($errors.Count -gt 0) { exit 1 }
