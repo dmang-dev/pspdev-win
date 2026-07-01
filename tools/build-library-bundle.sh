@@ -102,16 +102,16 @@ preflight() {
     fi
     # Map tool name -> MSYS2 package name (identity except where noted).
     declare -A pkg_for
-    pkg_for[cmake]=cmake
-    pkg_for[make]=make
-    pkg_for[curl]=curl
-    pkg_for[sha256sum]=coreutils
-    pkg_for[tar]=tar
-    pkg_for[unzip]=unzip
-    pkg_for[zip]=zip
-    pkg_for[git]=git
-    pkg_for[python3]=python
-    pkg_for[dos2unix]=dos2unix
+    pkg_for[cmake]="cmake"
+    pkg_for[make]="make"
+    pkg_for[curl]="curl"
+    pkg_for[sha256sum]="coreutils"
+    pkg_for[tar]="tar"
+    pkg_for[unzip]="unzip"
+    pkg_for[zip]="zip"
+    pkg_for[git]="git"
+    pkg_for[python3]="python"
+    pkg_for[dos2unix]="dos2unix"
 
     local missing=() missing_pkgs=()
     for tool in psp-gcc psp-pkg-config cmake make curl sha256sum tar unzip zip git python3 dos2unix; do
@@ -508,10 +508,14 @@ with open(renames_path, "w") as fh:
         source ./PSPBUILD
         set -u
 
-        # Walk source[] / sha256sums[] in parallel.
+        # Walk source[] / sha256sums[] in parallel. Both arrays are defined by
+        # the PSPBUILD sourced just above (Arch PKGBUILD convention), so
+        # shellcheck can't see their assignment — SC2154 is a false positive.
         local i=0
+        # shellcheck disable=SC2154
         for src_url in "${source[@]}"; do
             local sha="SKIP"
+            # shellcheck disable=SC2154
             if [ "${#sha256sums[@]}" -gt "$i" ]; then
                 sha="${sha256sums[$i]}"
             fi
